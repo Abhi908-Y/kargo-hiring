@@ -1,5 +1,6 @@
 import type { Role } from "@/config/scoring";
-import type { DraftKind } from "@/lib/ranking";
+import type { Band } from "@/lib/scores";
+import type { Stage } from "@/lib/types";
 
 export function cx(...classes: (string | false | null | undefined)[]) {
   return classes.filter(Boolean).join(" ");
@@ -27,10 +28,14 @@ export function RoleChip({ role, inferred }: { role: Role | null; inferred?: boo
   );
 }
 
-export function DraftChip({ kind, sent }: { kind: DraftKind | null; sent?: boolean }) {
-  if (sent) return <Chip tone="emerald">✓ {kind === "invite" ? "Invite" : "Rejection"} sent</Chip>;
-  if (!kind) return <Chip>No draft yet</Chip>;
-  return kind === "invite" ? <Chip tone="emerald">Invite draft</Chip> : <Chip tone="rose">Rejection draft</Chip>;
+export function StatusChip({ stage, band, sentKind }: { stage: Stage; band: Band | null; sentKind: "invite" | "rejection" | null }) {
+  if (stage === "sent") return <Chip tone="emerald">✓ {sentKind === "invite" ? "Invite" : "Rejection"} sent</Chip>;
+  if (stage === "invite_pending") return <Chip tone="emerald">Auto-invite · on hold</Chip>;
+  if (stage === "reject_pending") return <Chip tone="rose">Auto-reject · on hold</Chip>;
+  if (stage === "review") return <Chip tone="amber">Needs your review</Chip>;
+  if (stage === "drafting") return <Chip>Writing drafts…</Chip>;
+  if (band) return <Chip>{band.replace("_", "-")}</Chip>;
+  return <Chip>Not scored</Chip>;
 }
 
 export function Score({ value, size = "md" }: { value: number | null; size?: "md" | "lg" }) {

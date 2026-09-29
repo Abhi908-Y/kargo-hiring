@@ -3,7 +3,7 @@ import { env } from "@/lib/env";
 import { textToHtml } from "./templates";
 
 export interface DeliveryResult {
-  status: "sent" | "simulated";
+  status: "sent" | "scheduled" | "simulated";
   resendId: string | null;
   deliveredTo: string;
   fromAddress: string;
@@ -32,6 +32,8 @@ export async function deliverEmail(opts: {
   subject: string;
   text: string;
   idempotencyKey: string;
+  /** send later (Resend scheduled send) so it can still be cancelled */
+  scheduledAt?: Date;
 }): Promise<DeliveryResult> {
   const { to, testMode } = resolveRecipient(opts.intendedTo);
   const fromAddress = `${env.emailFromName()} <${env.emailFrom()}>`;
@@ -47,9 +49,26 @@ export async function deliverEmail(opts: {
 
   const replyTo = env.emailReplyTo();
   const { data, error } = await getResend(key).emails.send(
-    { from: fromAddress, to, subject, text, html, ...(replyTo ? { replyTo } : {}) },
+    {
+      from: fromAddress,
+      to,
+      subject,
+      text,
+      html,
+      ...(replyTo ? { replyTo } : {}),
+      ...(opts.scheduledAt ? { scheduledAt: opts.scheduledAt.toISOString() } : {}),
+    },
     { idempotencyKey: opts.idempotencyKey },
   );
   if (error || !data) throw new Error(`Resend: ${error?.message ?? "no response"}`);
-  return { status: "sent", resendId: data.id, deliveredTo: to, fromAddress, subject, text, html, testMode };
+  return { status: opts.scheduledAt ? "scheduled" : "sent", resendId: data.id, deliveredTo: to, fromAddress, subject, text, html, testMode };
+}
+
+/** Cancel a scheduled email. Returns an error message, or null on success. */
+export async function cancelScheduledEmail(resendId: string | null): Promise<string | null> {
+  if (!resendId) return null; // recorded-only email: nothing to cancel remotely
+  const key = env.resendApiKey();
+  if (!key) return null;
+  const { error } = await getResend(key).emails.cancel(resendId);
+  return error ? error.message : null;
 }

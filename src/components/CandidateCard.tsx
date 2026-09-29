@@ -1,28 +1,51 @@
 import Link from "next/link";
 import { dimensionsForRole, type Role } from "@/config/scoring";
 import { personalise } from "@/lib/drafting/draft";
-import type { DraftKind } from "@/lib/ranking";
-import type { Candidate } from "@/lib/types";
-import { SendButton } from "./SendButton";
-import { Chip, DraftChip, RoleChip, Score, ScoreBar, cx, displayName, formatDateTime } from "./ui";
+import { draftOf } from "@/lib/pipeline";
+import type { Candidate, EmailKind } from "@/lib/types";
+import { SendButton, UndoButton } from "./SendButton";
+import { Chip, RoleChip, Score, ScoreBar, StatusChip, cx, displayName, formatDateTime } from "./ui";
+
+function DraftPreview(props: { c: Candidate; kind: EmailKind; calendarLink: string; open?: boolean; action?: React.ReactNode }) {
+  const d = draftOf(props.c, props.kind);
+  if (!d.subject || !d.body) return null;
+  return (
+    <details className="rounded-xl border border-slate-200" open={props.open}>
+      <summary className="flex cursor-pointer flex-wrap items-baseline gap-x-2 px-3 py-2 text-sm">
+        <span className={cx("text-xs font-semibold uppercase", props.kind === "invite" ? "text-emerald-700" : "text-rose-700")}>
+          {props.kind === "invite" ? "Invite" : "Rejection"}
+        </span>
+        <span className="font-medium text-slate-900">{personalise(d.subject, props.c.first_name, props.calendarLink)}</span>
+        <span className="text-xs text-slate-500">{d.source === "edited" ? "edited by you" : d.source === "ai" ? "AI draft" : "standard wording"}</span>
+      </summary>
+      <pre className="whitespace-pre-wrap border-t border-slate-100 px-3 py-3 font-sans text-sm text-slate-700">
+        {personalise(d.body, props.c.first_name, props.calendarLink)}
+      </pre>
+      {props.action && <div className="border-t border-slate-100 px-3 py-2">{props.action}</div>}
+    </details>
+  );
+}
 
 export function CandidateCard(props: {
   c: Candidate;
   role: Role;
   rank: number | null;
-  isTop: boolean;
-  desiredKind: DraftKind;
   calendarLink: string;
+  names: Record<string, string>;
 }) {
-  const { c, role, rank, isTop, desiredKind } = props;
+  const { c, role, rank } = props;
   const score = role === "PM" ? c.score_pm : c.score_spm;
   const otherRole: Role = role === "PM" ? "SPM" : "PM";
   const otherScore = role === "PM" ? c.score_spm : c.score_pm;
-  const sent = c.stage === "sent";
-  const outOfDate = !sent && c.draft_kind && c.draft_kind !== desiredKind;
+  const pending = c.stage === "invite_pending" || c.stage === "reject_pending";
 
   return (
-    <article className={cx("rounded-2xl border bg-white p-4 sm:p-5", isTop ? "border-emerald-300" : "border-slate-200")}>
+    <article
+      className={cx(
+        "rounded-2xl border bg-white p-4 sm:p-5",
+        c.stage === "review" ? "border-amber-300" : c.band === "auto_invite" ? "border-emerald-300" : "border-slate-200",
+      )}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-baseline gap-2">
@@ -33,11 +56,8 @@ export function CandidateCard(props: {
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             <RoleChip role={c.assigned_role} inferred={c.role_source === "inferred"} />
-            {isTop && <Chip tone="emerald">Top {rank}</Chip>}
-            <DraftChip kind={c.draft_kind} sent={sent} />
-            {!sent && c.draft_kind === "rejection" && c.strong_pattern && (
-              <Chip tone="violet">Strong pattern ({c.pattern_score}/60): check before rejecting</Chip>
-            )}
+            <StatusChip stage={c.stage} band={c.band} sentKind={c.sent_kind} />
+            {c.strong_pattern && c.stage === "review" && <Chip tone="violet">Strong Kargo pattern ({c.pattern_score}/60): check before rejecting</Chip>}
             {c.role_mismatch && <Chip tone="sky">May fit {otherRole} better</Chip>}
             {c.flags.includes("location") && <Chip>Outside Mumbai</Chip>}
             {c.flags.includes("low_extraction_confidence") && <Chip tone="amber">CV text may be incomplete</Chip>}
@@ -54,7 +74,7 @@ export function CandidateCard(props: {
       {c.dimension_scores && (
         <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
           {dimensionsForRole(role).map((d) => (
-            <ScoreBar key={d.key} label={`${d.code} ${d.label.replace(/ \((PM|Senior PM) bar\)/, "")}`} value={c.dimension_scores![d.key]?.score ?? 0} max={d.max} />
+            <ScoreBar key={d.key} label={`${d.code} ${props.names[d.key] ?? ""}`} value={c.dimension_scores![d.key]?.score ?? 0} max={d.max} />
           ))}
         </div>
       )}
@@ -68,36 +88,35 @@ export function CandidateCard(props: {
         c.brief?.who_they_are && <p className="mt-4 text-sm text-slate-700">{c.brief.who_they_are}</p>
       )}
 
-      {c.draft_body && c.draft_subject && (
-        <details className="mt-4 rounded-xl border border-slate-200" open={!sent && isTop}>
-          <summary className="cursor-pointer px-3 py-2 text-sm">
-            <span className="font-medium text-slate-900">{personalise(c.draft_subject, c.first_name, props.calendarLink)}</span>
-            <span className="ml-2 text-xs text-slate-500">
-              {sent ? `sent ${formatDateTime(c.sent_at)}` : c.draft_source === "edited" ? "edited by you" : c.draft_source === "ai" ? "AI draft" : "standard wording"}
-            </span>
-          </summary>
-          <pre className="whitespace-pre-wrap border-t border-slate-100 px-3 py-3 font-sans text-sm text-slate-700">
-            {personalise(c.draft_body, c.first_name, props.calendarLink)}
-          </pre>
-        </details>
-      )}
+      {c.route_reason && <p className="mt-3 text-xs text-slate-500">{c.route_reason}</p>}
 
-      {outOfDate && (
-        <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          Ranking changed: this candidate should now get {desiredKind === "invite" ? "an invite" : "a rejection"}, but you edited the draft, so it wasn&apos;t replaced. Open the candidate to rewrite it.
-        </p>
-      )}
+      <div className="mt-4 space-y-2">
+        {c.stage === "review" && (
+          <>
+            <DraftPreview c={c} kind="invite" calendarLink={props.calendarLink} action={<SendButton id={c.id} kind="invite" to={c.email} size="sm" />} />
+            <DraftPreview c={c} kind="rejection" calendarLink={props.calendarLink} action={<SendButton id={c.id} kind="rejection" to={c.email} size="sm" />} />
+          </>
+        )}
+        {pending && c.sent_kind && <DraftPreview c={c} kind={c.sent_kind} calendarLink={props.calendarLink} />}
+        {c.stage === "sent" && c.sent_kind && <DraftPreview c={c} kind={c.sent_kind} calendarLink={props.calendarLink} />}
+      </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
-        {sent ? (
-          <span className="text-sm text-emerald-700">Sent {formatDateTime(c.sent_at)} to {c.email}</span>
-        ) : c.draft_kind ? (
-          <SendButton id={c.id} kind={c.draft_kind} to={c.email} size="sm" />
+        {pending && c.email_scheduled_for && c.sent_kind ? (
+          <UndoButton id={c.id} kind={c.sent_kind} scheduledFor={c.email_scheduled_for} size="sm" />
+        ) : c.stage === "sent" ? (
+          <span className="text-sm text-emerald-700">
+            {c.sent_kind === "invite" ? "Invite" : "Rejection"} sent {formatDateTime(c.sent_at)} {c.decided_by === "auto" ? "(automatic)" : "(by you)"}
+          </span>
+        ) : c.stage === "drafting" ? (
+          <span className="text-xs text-slate-500">Drafts are being written…</span>
+        ) : c.stage === "review" ? (
+          <span className="text-xs text-slate-500">Open a draft above to send it, or edit it on the candidate page.</span>
         ) : (
-          <span className="text-xs text-slate-500">Draft not written yet.</span>
+          <span />
         )}
         <Link href={`/candidates/${c.id}`} className="text-sm font-medium text-teal-700 hover:underline">
-          {sent ? "Details" : "Edit draft & details"} →
+          Details{c.stage === "review" ? " & edit drafts" : ""} →
         </Link>
       </div>
     </article>

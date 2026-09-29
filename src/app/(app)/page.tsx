@@ -5,54 +5,65 @@ import { Card, EmptyState, PageHeader, cx, displayName } from "@/components/ui";
 import { ROLE_TITLES, type Role } from "@/config/scoring";
 import { isCalendarPlaceholder } from "@/lib/emails/templates";
 import { configWarnings, env } from "@/lib/env";
-import { currentRanking, staleDrafts } from "@/lib/pipeline";
-import { desiredDraftKind } from "@/lib/ranking";
+import { allCandidates, missingDrafts, rankCandidates } from "@/lib/pipeline";
+import { getRubric } from "@/lib/rubric";
 import { getSettings } from "@/lib/settings";
+import type { Candidate } from "@/lib/types";
 
 export const metadata = { title: "Dashboard · Kargo Hiring" };
 
-const STATUS = [
-  { value: "to_send", label: "To send" },
-  { value: "sent", label: "Sent" },
-  { value: "all", label: "All" },
-] as const;
+const FILTERS: { value: string; label: string; match: (c: Candidate) => boolean }[] = [
+  { value: "all", label: "All", match: () => true },
+  { value: "review", label: "Review", match: (c) => c.stage === "review" || c.stage === "drafting" },
+  { value: "invite", label: "Auto-invite", match: (c) => c.band === "auto_invite" || c.stage === "invite_pending" },
+  { value: "reject", label: "Auto-reject", match: (c) => c.band === "auto_reject" || c.stage === "reject_pending" },
+  { value: "sent", label: "Sent", match: (c) => c.stage === "sent" },
+];
 
-export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ role?: string; status?: string }> }) {
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ role?: string; show?: string }> }) {
   const params = await searchParams;
   const role: Role = params.role === "SPM" ? "SPM" : "PM";
-  const status = STATUS.find((s) => s.value === params.status)?.value ?? "to_send";
+  const filter = FILTERS.find((f) => f.value === params.show) ?? FILTERS[0];
 
-  const [{ ranking, candidates }, settings] = await Promise.all([currentRanking(), getSettings()]);
-  const stale = staleDrafts(candidates, ranking).length;
+  const [candidates, settings, rubric] = await Promise.all([allCandidates(), getSettings(), getRubric()]);
+  const names = Object.fromEntries(rubric.filter((r) => r.role === role).map((r) => [r.dimension_key, r.name]));
+  const rank = rankCandidates(candidates);
+  const missing = candidates.reduce((n, c) => n + missingDrafts(c).length, 0);
   const unscored = candidates.filter((c) => c.stage === "processing");
   const scored = candidates.filter((c) => c.stage !== "processing");
   const inRole = (r: Role) => scored.filter((c) => c.assigned_role === r);
-
   const list = inRole(role)
-    .filter((c) => (status === "all" ? true : status === "sent" ? c.stage === "sent" : c.stage === "scored"))
-    .sort((a, b) => (ranking.rank.get(a.id) ?? 999) - (ranking.rank.get(b.id) ?? 999));
+    .filter(filter.match)
+    .sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
 
   const warnings = configWarnings();
   if (isCalendarPlaceholder(settings.calendarLink))
     warnings.push(
       env.testMode()
         ? "The interview calendar link is still the {calendar_link} placeholder. Set it in Settings before going live."
-        : "Set the interview calendar link in Settings. Invites can't be sent until you do.",
+        : "Set the interview calendar link in Settings. Until you do, high scorers go to review instead of getting an automatic invite.",
     );
 
-  const href = (r: Role, s: string) => `/?role=${r}${s === "to_send" ? "" : `&status=${s}`}`;
   const stats = [
-    { label: "CVs uploaded", value: candidates.length },
-    { label: "Invites to send", value: scored.filter((c) => c.stage === "scored" && c.draft_kind === "invite").length },
-    { label: "Rejections to send", value: scored.filter((c) => c.stage === "scored" && c.draft_kind === "rejection").length },
-    { label: "Sent", value: scored.filter((c) => c.stage === "sent").length },
+    { label: "CVs uploaded", value: candidates.length, href: "/" },
+    { label: "Waiting for your review", value: scored.filter((c) => c.stage === "review").length, href: "/review" },
+    { label: "Auto emails on hold", value: scored.filter((c) => c.stage === "invite_pending" || c.stage === "reject_pending").length, href: `/?role=${role}&show=all` },
+    { label: "Sent", value: scored.filter((c) => c.stage === "sent").length, href: `/?role=${role}&show=sent` },
   ];
+
+  const href = (r: Role, show: string) => `/?role=${r}${show === "all" ? "" : `&show=${show}`}`;
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Candidates"
-        subtitle={`Ranked by score within each role. The top ${settings.topN} per role get an interview brief and an invite draft; everyone else gets a rejection draft. Nothing is sent until you click Confirm.`}
+        subtitle={
+          <>
+            Ranked by score within each role. Below <b>{settings.autoRejectBelow}</b>: rejection sent automatically. Above{" "}
+            <b>{settings.autoInviteAbove}</b>: invite sent automatically. In between: your review.
+            {settings.holdHours > 0 ? ` Automatic emails wait ${settings.holdHours}h so you can Undo.` : " Automatic emails go out immediately."}
+          </>
+        }
         actions={
           <Link href="/upload" className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
             Upload CVs
@@ -70,19 +81,19 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {stats.map((s) => (
-          <div key={s.label} className="rounded-2xl border border-slate-200 bg-white p-4">
+          <Link key={s.label} href={s.href} className="rounded-2xl border border-slate-200 bg-white p-4 hover:border-slate-300">
             <div className="text-3xl font-semibold tabular-nums text-slate-900">{s.value}</div>
             <div className="mt-1 text-xs font-medium text-slate-500">{s.label}</div>
-          </div>
+          </Link>
         ))}
       </div>
 
-      {stale > 0 && (
+      {missing > 0 && (
         <Card className="flex flex-wrap items-center justify-between gap-3 border-teal-200 bg-teal-50/50">
           <p className="text-sm text-slate-800">
-            {stale} candidate{stale === 1 ? "" : "s"} need{stale === 1 ? "s" : ""} a new brief or email draft (new uploads or a change in the top {settings.topN}).
+            {missing} email draft{missing === 1 ? "" : "s"} still to write. Candidates move to review or get their automatic email once their drafts are ready.
           </p>
-          <DraftRefresher stale={stale} />
+          <DraftRefresher stale={missing} />
         </Card>
       )}
 
@@ -110,24 +121,24 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           {(["PM", "SPM"] as Role[]).map((r) => (
             <Link
               key={r}
-              href={href(r, status)}
+              href={href(r, filter.value)}
               className={cx("rounded-lg px-4 py-1.5 text-sm font-medium", r === role ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900")}
             >
               {ROLE_TITLES[r]} <span className="tabular-nums text-slate-400">{inRole(r).length}</span>
             </Link>
           ))}
         </div>
-        <div className="flex gap-1">
-          {STATUS.map((s) => (
+        <div className="flex flex-wrap gap-1">
+          {FILTERS.map((f) => (
             <Link
-              key={s.value}
-              href={href(role, s.value)}
+              key={f.value}
+              href={href(role, f.value)}
               className={cx(
                 "rounded-full px-3 py-1 text-sm",
-                s.value === status ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50",
+                f.value === filter.value ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50",
               )}
             >
-              {s.label}
+              {f.label}
             </Link>
           ))}
         </div>
@@ -146,15 +157,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       ) : (
         <div className="space-y-4">
           {list.map((c) => (
-            <CandidateCard
-              key={c.id}
-              c={c}
-              role={role}
-              rank={ranking.rank.get(c.id) ?? null}
-              isTop={ranking.top.has(c.id)}
-              desiredKind={desiredDraftKind(c.id, ranking)}
-              calendarLink={settings.calendarLink}
-            />
+            <CandidateCard key={c.id} c={c} role={role} rank={rank.get(c.id) ?? null} calendarLink={settings.calendarLink} names={names} />
           ))}
         </div>
       )}

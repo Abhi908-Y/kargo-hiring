@@ -2,7 +2,7 @@ import "server-only";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { RUBRIC_CRITERIA } from "@/config/rubric";
+import { DEFAULT_RUBRIC } from "@/config/rubric";
 import { DEFAULT_SETTINGS } from "@/config/scoring";
 import { finish, Query, splitCols, type Db, type Filter, type Plan, type Result, type Row } from "./query";
 
@@ -64,20 +64,24 @@ function withDefaults(table: string, row: Row, t: Tables): Row {
         assigned_role: null, role_source: null, role_reasoning: null, role_mismatch: false, pattern_score: null,
         score_pm: null, score_spm: null, total_score: null, strong_pattern: false, dimension_scores: null, brief: null,
         personal_line: null, flags: [], ai_raw: null, model: null, scored_at: null, scoring_error: null,
-        interview_brief: null, draft_kind: null, draft_subject: null, draft_body: null, draft_source: null,
-        draft_error: null, drafted_at: null, sent_at: null,
+        band: null, route_reason: null, interview_brief: null, invite_subject: null, invite_body: null,
+        invite_source: null, rejection_subject: null, rejection_body: null, rejection_source: null,
+        draft_error: null, drafted_at: null, email_scheduled_for: null, decided_by: null, sent_kind: null, sent_at: null,
         ...row,
       };
     case "emails":
       return {
-        id: crypto.randomUUID(), created_at: now(), delivered_to: null, simulated: false, from_address: null,
-        sent_at: null, resend_id: null, error: null,
+        id: crypto.randomUUID(), created_at: now(), trigger: "arjun", delivered_to: null, simulated: false,
+        from_address: null, scheduled_for: null, sent_at: null, cancelled_at: null, resend_id: null, error: null,
         ...row,
       };
     case "candidate_events":
       return { id: (t.candidate_events?.at(-1)?.id ?? 0) + 1, created_at: now(), detail: null, ...row };
     case "settings":
-      return { id: 1, top_n: DEFAULT_SETTINGS.topN, calendar_link: DEFAULT_SETTINGS.calendarLink, updated_at: now(), ...row };
+      return {
+        id: 1, auto_reject_below: DEFAULT_SETTINGS.autoRejectBelow, auto_invite_above: DEFAULT_SETTINGS.autoInviteAbove,
+        hold_hours: DEFAULT_SETTINGS.holdHours, calendar_link: DEFAULT_SETTINGS.calendarLink, updated_at: now(), ...row,
+      };
     default:
       return row;
   }
@@ -131,6 +135,10 @@ async function execute(plan: Plan): Promise<Result> {
   const t = load();
   const rows = (t[plan.table] ??= []);
   let result: Row[] = [];
+  if (plan.table === "rubric_criteria" && rows.length === 0) {
+    // Seeded like `npm run db:setup` does for Neon (saved with the next write).
+    DEFAULT_RUBRIC.forEach((c, i) => rows.push({ id: i + 1, updated_at: now(), ...c }));
+  }
 
   if (plan.op === "insert" || plan.op === "upsert") {
     const items = (Array.isArray(plan.payload) ? plan.payload : [plan.payload!]) as Row[];
@@ -159,10 +167,6 @@ async function execute(plan: Plan): Promise<Result> {
     save(t);
     return { data: null, error: null };
   } else {
-    if (plan.table === "rubric_criteria" && rows.length === 0) {
-      // Seeded like `npm run db:setup` does for Neon.
-      RUBRIC_CRITERIA.forEach((c, i) => rows.push({ id: i + 1, ...c }));
-    }
     result = rows.filter((r) => matches(r, plan.filters));
     if (plan.table === "settings" && result.length === 0) result = [withDefaults("settings", {}, t)];
   }

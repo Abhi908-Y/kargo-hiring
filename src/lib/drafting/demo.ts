@@ -1,8 +1,7 @@
 // Demo-mode stand-in for the Gemini drafter (DEMO_MODE=true, no GEMINI_API_KEY):
 // standard wording plus a brief stitched from the demo scorer's output.
 
-import type { DraftKind } from "@/lib/ranking";
-import type { Candidate } from "@/lib/types";
+import type { Candidate, EmailKind as DraftKind } from "@/lib/types";
 import { templateDraft, type DraftResult } from "./draft";
 
 export async function demoDraftEmail(c: Candidate, kind: DraftKind): Promise<DraftResult> {

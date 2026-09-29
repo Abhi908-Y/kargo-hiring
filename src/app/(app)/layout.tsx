@@ -3,10 +3,12 @@ import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { isDemoMode } from "@/lib/demo/mode";
 import { env } from "@/lib/env";
+import { finalizeDue } from "@/lib/pipeline";
 
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   const email = await requireAdmin();
-  const { count } = await db().from("candidates").select("id", { count: "exact", head: true }).eq("stage", "scored");
+  await finalizeDue();
+  const { count } = await db().from("candidates").select("id", { count: "exact", head: true }).eq("stage", "review");
   const demo = isDemoMode();
 
   return (
@@ -38,7 +40,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
               </form>
             )}
           </div>
-          <Nav toSend={count ?? 0} />
+          <Nav reviewCount={count ?? 0} />
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>

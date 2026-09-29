@@ -18,6 +18,11 @@ interface Item {
 }
 
 const MAX_BYTES = 4 * 1024 * 1024;
+const BAND_TEXT: Record<string, string> = {
+  auto_invite: "automatic invite",
+  auto_reject: "automatic rejection",
+  review: "your review queue",
+};
 
 function validate(file: File): string | null {
   if (!/\.(pdf|docx)$/i.test(file.name)) return "Only .pdf and .docx files are supported.";
@@ -122,7 +127,7 @@ export function UploadClient() {
         progress: 100,
         message: body.scoringError
           ? `Scoring failed (${body.scoringError}). The CV is saved; retry from the dashboard.`
-          : `Scored: PM ${body.scorePm}/100 · SPM ${body.scoreSpm}/100 (ranked as ${body.role})`,
+          : `Scored: PM ${body.scorePm}/100 · SPM ${body.scoreSpm}/100 (as ${body.role}) → ${BAND_TEXT[body.band] ?? body.band}`,
         result: { id, stage: body.stage, total: body.total, role: body.role, scoringError: body.scoringError },
       });
     } catch {
@@ -317,7 +322,7 @@ export function UploadClient() {
       {drafting && (
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="mb-1 flex justify-between text-xs text-slate-600">
-            <span>Writing interview briefs and email drafts</span>
+            <span>Writing interview briefs and email drafts, then sending or queuing</span>
             <span className="tabular-nums">
               {drafting.done} of {drafting.total || "…"}
             </span>
@@ -333,7 +338,7 @@ export function UploadClient() {
       )}
       {active > 0 && finished === items.length && !running && (
         <p className="text-sm text-slate-600">
-          All done. <Link href="/" className="font-medium text-teal-700 hover:underline">Open the dashboard</Link> to read the drafts and send.
+          All done. <Link href="/review" className="font-medium text-teal-700 hover:underline">Open the review queue</Link> or the <Link href="/" className="font-medium text-teal-700 hover:underline">dashboard</Link>.
         </p>
       )}
     </div>

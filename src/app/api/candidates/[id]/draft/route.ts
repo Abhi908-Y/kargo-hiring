@@ -11,15 +11,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if ("response" in auth) return auth.response;
 
   const { id } = await params;
-  const body = (await request.json().catch(() => ({}))) as { action?: string; subject?: string; body?: string; kind?: string };
+  const body = (await request.json().catch(() => ({}))) as { action?: string; kind?: string; subject?: string; body?: string };
+  if (body.kind !== "invite" && body.kind !== "rejection") return NextResponse.json({ error: "kind must be invite or rejection" }, { status: 400 });
   const result =
     body.action === "regenerate"
-      ? await regenerateDraft(id)
-      : await saveDraft(id, {
-          subject: body.subject ?? "",
-          body: body.body ?? "",
-          kind: body.kind === "invite" || body.kind === "rejection" ? body.kind : undefined,
-        });
+      ? await regenerateDraft(id, body.kind)
+      : await saveDraft(id, body.kind, { subject: body.subject ?? "", body: body.body ?? "" });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
   return NextResponse.json({ ok: true });
 }

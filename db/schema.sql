@@ -1,11 +1,12 @@
 -- Kargo hiring app: Neon Postgres schema.
 -- Run with:  npm run db:setup   (uses DATABASE_URL from .env.local)
--- or paste into the Neon console SQL Editor. Safe to re-run.
+-- Safe to re-run: creates what's missing and upgrades older versions in place.
 
 create extension if not exists pgcrypto;
 
 -- ---------------------------------------------------------------------------
--- Rubric: one row per criterion per role (seeded from src/config/rubric.ts)
+-- Rubric: one row per criterion per role. Seeded from src/config/rubric.ts,
+-- then edited on the Rubric page.
 -- ---------------------------------------------------------------------------
 create table if not exists rubric_criteria (
   id             serial primary key,
@@ -14,32 +15,44 @@ create table if not exists rubric_criteria (
   dimension_key  text not null,
   name           text not null,
   description    text not null,
+  max_points     int  not null default 10,
   weight_pct     int  not null check (weight_pct between 0 and 100),
   sort_order     int  not null,
   unique (role, dimension_key)
 );
+alter table rubric_criteria add column if not exists max_points int not null default 10;
+alter table rubric_criteria add column if not exists updated_at timestamptz not null default now();
 
 -- ---------------------------------------------------------------------------
 -- Settings (single row)
 -- ---------------------------------------------------------------------------
 create table if not exists settings (
-  id             int primary key default 1 check (id = 1),
-  top_n          int  not null default 5 check (top_n between 1 and 100),
-  calendar_link  text not null default '{calendar_link}',
-  updated_at     timestamptz not null default now()
+  id                 int primary key default 1 check (id = 1),
+  auto_reject_below  int     not null default 30,
+  auto_invite_above  int     not null default 80,
+  hold_hours         numeric not null default 4,
+  calendar_link      text    not null default '{calendar_link}',
+  updated_at         timestamptz not null default now()
 );
+alter table settings add column if not exists auto_reject_below int not null default 30;
+alter table settings add column if not exists auto_invite_above int not null default 80;
+alter table settings add column if not exists hold_hours numeric not null default 4;
+alter table settings drop column if exists top_n;
 insert into settings (id) values (1) on conflict (id) do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Candidates
--- stage: processing (not scored yet, or scoring failed) -> scored -> sent
+-- stage: processing  -> uploaded, not scored (or scoring failed)
+--        drafting    -> scored, email drafts being written
+--        review      -> middle band: waiting for Arjun
+--        invite_pending / reject_pending -> automatic email held (Undo available)
+--        sent        -> email gone (sent_kind says which)
 -- ---------------------------------------------------------------------------
 create table if not exists candidates (
   id                  uuid primary key default gen_random_uuid(),
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now(),
 
-  -- file + duplicate detection
   file_name           text not null,
   file_path           text,
   file_type           text not null check (file_type in ('pdf', 'docx')),
@@ -57,9 +70,8 @@ create table if not exists candidates (
   extraction_warning  text,
 
   tagged_role         text check (tagged_role in ('PM', 'SPM')),
-  stage               text not null default 'processing' check (stage in ('processing', 'scored', 'sent')),
+  stage               text not null default 'processing',
 
-  -- scores: every candidate is scored against BOTH rubrics
   assigned_role       text check (assigned_role in ('PM', 'SPM')),
   role_source         text check (role_source in ('tagged', 'inferred')),
   role_reasoning      text,
@@ -67,27 +79,47 @@ create table if not exists candidates (
   pattern_score       int,
   score_pm            int,
   score_spm           int,
-  total_score         int,      -- score for the assigned role (used for ranking)
+  total_score         int,
   strong_pattern      boolean not null default false,
-  dimension_scores    jsonb,    -- {dimension_key: {score, status, evidence}}
-  brief               jsonb,    -- {who_they_are, why_ranked_here[], what_to_probe[]}
+  dimension_scores    jsonb,
+  brief               jsonb,
   personal_line       text,
   flags               text[] not null default '{}',
   ai_raw              jsonb,
   model               text,
   scored_at           timestamptz,
-  scoring_error       text,
-
-  -- top-N interview brief + email draft (uses [NAME] and {calendar_link} placeholders)
-  interview_brief     text,
-  draft_kind          text check (draft_kind in ('invite', 'rejection')),
-  draft_subject       text,
-  draft_body          text,
-  draft_source        text check (draft_source in ('ai', 'template', 'edited')),
-  draft_error         text,
-  drafted_at          timestamptz,
-  sent_at             timestamptz
+  scoring_error       text
 );
+
+alter table candidates add column if not exists band text;
+alter table candidates add column if not exists route_reason text;
+alter table candidates add column if not exists interview_brief text;
+alter table candidates add column if not exists invite_subject text;
+alter table candidates add column if not exists invite_body text;
+alter table candidates add column if not exists invite_source text;
+alter table candidates add column if not exists rejection_subject text;
+alter table candidates add column if not exists rejection_body text;
+alter table candidates add column if not exists rejection_source text;
+alter table candidates add column if not exists draft_error text;
+alter table candidates add column if not exists drafted_at timestamptz;
+alter table candidates add column if not exists email_scheduled_for timestamptz;
+alter table candidates add column if not exists decided_by text;
+alter table candidates add column if not exists sent_kind text;
+alter table candidates add column if not exists sent_at timestamptz;
+-- from the previous version (single draft + top-N)
+alter table candidates drop column if exists draft_kind;
+alter table candidates drop column if exists draft_subject;
+alter table candidates drop column if exists draft_body;
+alter table candidates drop column if exists draft_source;
+-- Drop the old stage rule first, move old rows, then add the new rule.
+alter table candidates drop constraint if exists candidates_stage_check;
+update candidates set stage = 'drafting' where stage = 'scored';
+-- rows scored before bands existed go to review; nothing is ever sent for them automatically
+update candidates set band = 'review' where band is null and stage <> 'processing';
+alter table candidates add constraint candidates_stage_check
+  check (stage in ('processing', 'drafting', 'review', 'invite_pending', 'reject_pending', 'sent'));
+alter table candidates drop constraint if exists candidates_band_check;
+alter table candidates add constraint candidates_band_check check (band in ('auto_reject', 'review', 'auto_invite'));
 
 create unique index if not exists candidates_email_unique on candidates (lower(email)) where email is not null;
 create index if not exists candidates_rank_idx on candidates (assigned_role, total_score desc nulls last);
@@ -103,7 +135,7 @@ create table if not exists cv_files (
 );
 
 -- ---------------------------------------------------------------------------
--- Sent emails
+-- Emails
 -- ---------------------------------------------------------------------------
 create table if not exists emails (
   id             uuid primary key default gen_random_uuid(),
@@ -113,16 +145,23 @@ create table if not exists emails (
   intended_to    text not null,
   delivered_to   text,
   test_mode      boolean not null,
-  simulated      boolean not null default false,  -- true when RESEND_API_KEY is not set
+  simulated      boolean not null default false,
   from_address   text,
   subject        text not null,
   body_text      text not null,
   body_html      text not null,
-  status         text not null check (status in ('queued', 'sent', 'failed')),
+  status         text not null,
   sent_at        timestamptz,
   resend_id      text,
   error          text
 );
+alter table emails add column if not exists trigger text not null default 'arjun';
+alter table emails add column if not exists scheduled_for timestamptz;
+alter table emails add column if not exists cancelled_at timestamptz;
+alter table emails drop constraint if exists emails_status_check;
+alter table emails drop constraint if exists emails_kind_check;
+alter table emails add constraint emails_kind_check check (kind in ('invite', 'rejection'));
+alter table emails add constraint emails_status_check check (status in ('queued', 'scheduled', 'sent', 'cancelled', 'failed'));
 create index if not exists emails_created_idx on emails (created_at desc);
 
 -- ---------------------------------------------------------------------------

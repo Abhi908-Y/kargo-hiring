@@ -1,8 +1,9 @@
 import type { DimensionKey, Role } from "@/config/scoring";
-import type { DraftKind } from "@/lib/ranking";
+import type { Band } from "@/lib/scores";
 import type { DimensionScore } from "@/lib/scoring/schema";
 
-export type Stage = "processing" | "scored" | "sent";
+export type Stage = "processing" | "drafting" | "review" | "invite_pending" | "reject_pending" | "sent";
+export type EmailKind = "invite" | "rejection";
 
 export interface Brief {
   who_they_are: string;
@@ -41,21 +42,31 @@ export interface Candidate {
   model: string | null;
   scored_at: string | null;
   scoring_error: string | null;
+  band: Band | null;
+  route_reason: string | null;
   interview_brief: string | null;
-  draft_kind: DraftKind | null;
-  draft_subject: string | null;
-  draft_body: string | null;
-  draft_source: "ai" | "template" | "edited" | null;
+  invite_subject: string | null;
+  invite_body: string | null;
+  invite_source: DraftSource | null;
+  rejection_subject: string | null;
+  rejection_body: string | null;
+  rejection_source: DraftSource | null;
   draft_error: string | null;
   drafted_at: string | null;
+  email_scheduled_for: string | null;
+  decided_by: "auto" | "arjun" | null;
+  sent_kind: EmailKind | null;
   sent_at: string | null;
 }
+
+export type DraftSource = "ai" | "template" | "edited";
 
 export interface EmailRow {
   id: string;
   created_at: string;
   candidate_id: string;
-  kind: DraftKind;
+  kind: EmailKind;
+  trigger: "auto" | "arjun";
   intended_to: string;
   delivered_to: string | null;
   test_mode: boolean;
@@ -64,8 +75,10 @@ export interface EmailRow {
   subject: string;
   body_text: string;
   body_html: string;
-  status: "queued" | "sent" | "failed";
+  status: "queued" | "scheduled" | "sent" | "cancelled" | "failed";
+  scheduled_for: string | null;
   sent_at: string | null;
+  cancelled_at: string | null;
   resend_id: string | null;
   error: string | null;
 }
@@ -85,6 +98,7 @@ export interface RubricCriterionRow {
   dimension_key: string;
   name: string;
   description: string;
+  max_points: number;
   weight_pct: number;
   sort_order: number;
 }

@@ -21,6 +21,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     scorePm: c.score_pm,
     scoreSpm: c.score_spm,
     total: c.total_score,
+    band: c.band,
     scoringError: c.scoring_error,
   });
 }

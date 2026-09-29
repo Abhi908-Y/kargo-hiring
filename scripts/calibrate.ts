@@ -16,6 +16,7 @@
 import { config as loadEnv } from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
+import { DEFAULT_RUBRIC } from "../src/config/rubric";
 import { STRONG_PATTERN_MIN, type Role } from "../src/config/scoring";
 import { extractCvText, fileTypeFromName } from "../src/lib/extract";
 import { extractContact, redactCv } from "../src/lib/redact";
@@ -25,6 +26,10 @@ import { scoreCv } from "../src/lib/scoring/score";
 
 // The rubric's calibration bar (its original auto-reject rule).
 const REJECT_BELOW = 40;
+// Uses the original rubric weights (the rubric file), not live edits.
+const RUBRIC = DEFAULT_RUBRIC.map((r, i) => ({ id: i + 1, ...r }));
+const WEIGHTS = { PM: {}, SPM: {} } as Record<Role, Record<string, number>>;
+for (const r of RUBRIC) WEIGHTS[r.role][r.dimension_key] = r.weight_pct;
 
 loadEnv({ path: ".env.local" });
 loadEnv();
@@ -99,9 +104,9 @@ async function main() {
 
     process.stdout.write(`• ${file} … `);
     try {
-      const { output } = await scoreCv({ candidateId: file, taggedRole, redactedText: redacted });
+      const { output } = await scoreCv({ candidateId: file, taggedRole, redactedText: redacted, rubric: RUBRIC });
       row.ai = output;
-      row.score = summariseScores(output.scores, taggedRole);
+      row.score = summariseScores(output.scores, taggedRole, WEIGHTS);
       row.total = row.score.totals[row.score.assignedRole];
       row.rejectBand = row.total < REJECT_BELOW && row.score.pattern < STRONG_PATTERN_MIN;
       console.log(`${row.total}/100 as ${row.score.assignedRole} (PM ${row.score.totals.PM}, SPM ${row.score.totals.SPM}, pattern ${row.score.pattern})${row.rejectBand ? " → REJECT BAND" : ""}`);

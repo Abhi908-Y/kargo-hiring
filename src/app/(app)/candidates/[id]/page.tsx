@@ -1,14 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ScoreButton } from "@/components/PipelineButtons";
-import { SendButton } from "@/components/SendButton";
-import { Card, Chip, DraftChip, PageHeader, RoleChip, Score, ScoreBar, SectionTitle, cx, displayName, formatDateTime } from "@/components/ui";
-import { PATTERN_DIMENSIONS, PATTERN_MAX, ROLE_FIT_DIMENSIONS, ROLE_TITLES, type Role } from "@/config/scoring";
+import { SendButton, UndoButton } from "@/components/SendButton";
+import { Card, Chip, PageHeader, RoleChip, Score, ScoreBar, SectionTitle, StatusChip, cx, displayName, formatDateTime } from "@/components/ui";
+import { DIMENSIONS, PATTERN_MAX, ROLE_TITLES, type Role } from "@/config/scoring";
 import { db } from "@/lib/db";
 import { personalise } from "@/lib/drafting/draft";
 import { resolveRecipient } from "@/lib/emails/send";
-import { currentRanking } from "@/lib/pipeline";
-import { desiredDraftKind } from "@/lib/ranking";
+import { allCandidates, draftOf, rankCandidates } from "@/lib/pipeline";
+import { getRubric } from "@/lib/rubric";
 import { getSettings } from "@/lib/settings";
 import type { CandidateEvent, EmailRow } from "@/lib/types";
 import { ContactForm } from "./ContactForm";
@@ -21,9 +21,10 @@ const FLAG_TEXT: Record<string, string> = {
 
 export default async function CandidatePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [{ ranking, candidates }, settings, emailsRes, eventsRes] = await Promise.all([
-    currentRanking(),
+  const [candidates, settings, rubric, emailsRes, eventsRes] = await Promise.all([
+    allCandidates(),
     getSettings(),
+    getRubric(),
     db().from("emails").select("*").eq("candidate_id", id).order("created_at", { ascending: false }),
     db().from("candidate_events").select("*").eq("candidate_id", id).order("created_at", { ascending: true }),
   ]);
@@ -33,10 +34,11 @@ export default async function CandidatePage({ params }: { params: Promise<{ id: 
   const emails = (emailsRes.data ?? []) as EmailRow[];
   const events = (eventsRes.data ?? []) as CandidateEvent[];
   const role = c.assigned_role ?? c.tagged_role;
-  const rank = ranking.rank.get(c.id) ?? null;
-  const isTop = ranking.top.has(c.id);
-  const suggested = desiredDraftKind(c.id, ranking);
+  const rank = rankCandidates(candidates).get(c.id) ?? null;
   const ds = c.dimension_scores;
+  const nameOf = (key: string) => rubric.find((r) => r.dimension_key === key)?.name ?? key;
+  const weightOf = (key: string, r: Role) => rubric.find((x) => x.dimension_key === key && x.role === r)?.weight_pct;
+  const pending = c.stage === "invite_pending" || c.stage === "reject_pending";
 
   let deliversTo: string | null = null;
   try {
@@ -56,8 +58,8 @@ export default async function CandidatePage({ params }: { params: Promise<{ id: 
         subtitle={
           <span className="flex flex-wrap items-center gap-2">
             <RoleChip role={role} inferred={c.role_source === "inferred"} />
-            {rank != null && <Chip tone={isTop ? "emerald" : "slate"}>#{rank} of {role} applicants{isTop ? ` · top ${settings.topN}` : ""}</Chip>}
-            <DraftChip kind={c.draft_kind} sent={c.stage === "sent"} />
+            {rank != null && <Chip>#{rank} of {role} applicants</Chip>}
+            <StatusChip stage={c.stage} band={c.band} sentKind={c.sent_kind} />
             <span>Uploaded {formatDateTime(c.created_at)}</span>
             <a href={`/api/candidates/${c.id}/cv`} className="font-medium text-teal-700 hover:underline">
               Original CV
@@ -86,9 +88,9 @@ export default async function CandidatePage({ params }: { params: Promise<{ id: 
                 </div>
               ))}
             </div>
-            <ScoreBar label="Arjun's pattern (shared)" value={c.pattern_score} max={PATTERN_MAX} />
+            <ScoreBar label="Kargo pattern, A1–A5 points (shared)" value={c.pattern_score} max={PATTERN_MAX} />
             <div className="flex flex-wrap gap-2">
-              {c.strong_pattern && <Chip tone="violet">Strong pattern: check before rejecting</Chip>}
+              {c.strong_pattern && <Chip tone="violet">Strong Kargo pattern ({c.pattern_score}/60)</Chip>}
               {c.role_mismatch && <Chip tone="sky">May fit {role === "PM" ? "SPM" : "PM"} better</Chip>}
               {c.flags.map((f, i) => (
                 <Chip key={i}>{FLAG_TEXT[f] ?? f.replace(/^claims_to_verify:\s*/i, "Verify: ")}</Chip>
@@ -143,7 +145,7 @@ export default async function CandidatePage({ params }: { params: Promise<{ id: 
         </div>
       )}
 
-      {/* Email: the draft, the editor and the one-click send */}
+      {/* Routing + email */}
       {c.stage !== "processing" && (
         <Card>
           <SectionTitle
@@ -155,57 +157,88 @@ export default async function CandidatePage({ params }: { params: Promise<{ id: 
           >
             Email
           </SectionTitle>
-          {c.stage === "sent" ? (
-            emails.map((e) => (
-              <div key={e.id} className="mb-3 rounded-xl border border-slate-200 p-3 text-sm">
-                <div className="text-xs text-slate-500">
-                  {e.status === "sent" ? `Sent ${formatDateTime(e.sent_at)}` : `Failed: ${e.error}`} · To {e.delivered_to ?? e.intended_to}
-                  {e.test_mode ? " · test mode" : ""}
-                  {e.simulated ? " · not delivered (no Resend key)" : ""}
-                </div>
-                <div className="mt-1 font-medium text-slate-900">{e.subject}</div>
-                <pre className="mt-2 whitespace-pre-wrap font-sans text-slate-700">{e.body_text}</pre>
-              </div>
-            ))
-          ) : c.draft_body && c.draft_subject && c.draft_kind ? (
-            <div className="grid gap-5 lg:grid-cols-2">
-              <div>
-                <div className="mb-2 text-xs font-medium text-slate-500">
-                  Preview, exactly as it will be sent ({c.draft_source === "edited" ? "edited by you" : c.draft_source === "ai" ? "AI draft" : "standard wording"})
-                </div>
-                <div className="rounded-xl border border-slate-200 p-3">
-                  <div className="text-sm font-medium text-slate-900">{personalise(c.draft_subject, c.first_name, settings.calendarLink)}</div>
-                  <pre className="mt-2 whitespace-pre-wrap font-sans text-sm text-slate-700">{personalise(c.draft_body, c.first_name, settings.calendarLink)}</pre>
-                </div>
-                {c.draft_error && <p className="mt-2 text-xs text-amber-700">{c.draft_error}</p>}
-                <div className="mt-3">
-                  <SendButton id={c.id} kind={c.draft_kind} to={c.email} />
-                </div>
-              </div>
-              <div>
-                <div className="mb-2 text-xs font-medium text-slate-500">Edit</div>
-                <DraftEditor key={c.updated_at} id={c.id} subject={c.draft_subject} body={c.draft_body} kind={c.draft_kind} suggestedKind={suggested} />
-              </div>
+          {c.route_reason && <p className="mb-3 text-sm text-slate-600">{c.route_reason}</p>}
+          {c.draft_error && <p className="mb-3 text-xs text-amber-700">{c.draft_error}</p>}
+
+          {pending && c.email_scheduled_for && c.sent_kind && (
+            <div className="mb-4">
+              <UndoButton id={c.id} kind={c.sent_kind} scheduledFor={c.email_scheduled_for} />
             </div>
-          ) : (
-            <p className="text-sm text-slate-500">The draft hasn&apos;t been written yet. Use &quot;Write drafts now&quot; on the dashboard.</p>
+          )}
+
+          {c.stage === "drafting" && <p className="text-sm text-slate-500">Drafts are being written. Refresh in a moment, or use &quot;Write drafts now&quot; on the dashboard.</p>}
+
+          {(c.stage === "review" || pending) && (
+            <div className="grid gap-5 lg:grid-cols-2">
+              {(c.stage === "review" ? (["invite", "rejection"] as const) : ([c.sent_kind!] as const)).map((kind) => {
+                const d = draftOf(c, kind);
+                if (!d.subject || !d.body) return null;
+                return (
+                  <div key={kind} className="space-y-2">
+                    <div className={cx("text-xs font-semibold uppercase", kind === "invite" ? "text-emerald-700" : "text-rose-700")}>
+                      {kind === "invite" ? "Interview invite" : "Rejection"}{" "}
+                      <span className="font-normal normal-case text-slate-500">
+                        ({d.source === "edited" ? "edited by you" : d.source === "ai" ? "AI draft" : "standard wording"})
+                      </span>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <div className="text-sm font-medium text-slate-900">{personalise(d.subject, c.first_name, settings.calendarLink)}</div>
+                      <pre className="mt-2 whitespace-pre-wrap font-sans text-sm text-slate-700">{personalise(d.body, c.first_name, settings.calendarLink)}</pre>
+                    </div>
+                    {c.stage === "review" && (
+                      <>
+                        <SendButton id={c.id} kind={kind} to={c.email} />
+                        <DraftEditor key={`${kind}-${c.updated_at}`} id={c.id} kind={kind} subject={d.subject} body={d.body} />
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {emails.length > 0 && (
+            <div className="mt-5 space-y-3">
+              <div className="text-xs font-semibold uppercase text-slate-500">Email history</div>
+              {emails.map((e) => (
+                <div key={e.id} className="rounded-xl border border-slate-200 p-3 text-sm">
+                  <div className="text-xs text-slate-500">
+                    <span className="font-medium capitalize text-slate-700">{e.kind}</span> · {e.trigger === "auto" ? "automatic" : "by you"} ·{" "}
+                    {e.status === "scheduled"
+                      ? `scheduled for ${formatDateTime(e.scheduled_for)}`
+                      : e.status === "cancelled"
+                        ? `cancelled ${formatDateTime(e.cancelled_at)}`
+                        : e.status === "failed"
+                          ? `failed: ${e.error}`
+                          : `sent ${formatDateTime(e.sent_at)}`}{" "}
+                    · to {e.delivered_to ?? e.intended_to}
+                    {e.test_mode ? " · test mode" : ""}
+                    {e.simulated ? " · not delivered (no Resend key)" : ""}
+                  </div>
+                  <div className="mt-1 font-medium text-slate-900">{e.subject}</div>
+                  <pre className="mt-2 whitespace-pre-wrap font-sans text-slate-700">{e.body_text}</pre>
+                </div>
+              ))}
+            </div>
           )}
         </Card>
       )}
 
       {ds && role && (
         <Card>
-          <SectionTitle hint="Every point is backed by a line from the CV">Score breakdown (both rubrics)</SectionTitle>
+          <SectionTitle hint="Every point is backed by a line from the CV. Weights come from the Rubric page.">Score breakdown (both rubrics)</SectionTitle>
           <div className="divide-y divide-slate-100 rounded-xl border border-slate-200">
-            {[...PATTERN_DIMENSIONS, ...ROLE_FIT_DIMENSIONS].map((d) => {
+            {DIMENSIONS.map((d) => {
               const data = ds[d.key];
-              const onlyFor = d.key === "B1_product_ownership_pm" ? "PM" : d.key === "B1_product_ownership_spm" ? "SPM" : null;
+              const onlyFor = d.roles.length === 1 ? d.roles[0] : null;
+              const wPm = weightOf(d.key, "PM");
+              const wSpm = weightOf(d.key, "SPM");
               return (
                 <div key={d.key} className="grid gap-2 p-3 sm:grid-cols-[15rem_1fr] sm:gap-4">
                   <div>
                     <div className="text-sm font-medium text-slate-900">
                       <span className="mr-1 text-xs font-semibold text-slate-400">{d.code}</span>
-                      {d.label}
+                      {nameOf(d.key)}
                     </div>
                     <div className="mt-1.5 flex items-center gap-2">
                       <div className="flex-1">
@@ -215,7 +248,9 @@ export default async function CandidatePage({ params }: { params: Promise<{ id: 
                         {data?.score ?? 0}/{d.max}
                       </span>
                     </div>
-                    <div className="mt-1 text-[11px] text-slate-500">{onlyFor ? `Counts for ${onlyFor} only` : "Counts for both roles"}</div>
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      {onlyFor ? `${onlyFor} only · weight ${onlyFor === "PM" ? wPm : wSpm}%` : `Weight PM ${wPm}% · SPM ${wSpm}%`}
+                    </div>
                   </div>
                   <div className="text-sm">
                     {data?.status === "not_evidenced" && (

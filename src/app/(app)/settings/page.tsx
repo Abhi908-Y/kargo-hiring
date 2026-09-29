@@ -1,21 +1,16 @@
 import { Card, PageHeader, SectionTitle } from "@/components/ui";
-import { DEFAULT_SETTINGS, type Role } from "@/config/scoring";
-import { db } from "@/lib/db";
+import Link from "next/link";
+import { DEFAULT_SETTINGS } from "@/config/scoring";
 import { isDemoMode } from "@/lib/demo/mode";
 import { env } from "@/lib/env";
 import { geminiModel } from "@/lib/gemini";
 import { getSettings } from "@/lib/settings";
-import type { RubricCriterionRow } from "@/lib/types";
 import { ResetDemoButton, SettingsForm } from "./SettingsForm";
 
 export const metadata = { title: "Settings · Kargo Hiring" };
 
 export default async function SettingsPage() {
-  const [settings, rubricRes] = await Promise.all([
-    getSettings(),
-    db().from("rubric_criteria").select("*").order("role").order("sort_order"),
-  ]);
-  const rubric = (rubricRes.data ?? []) as RubricCriterionRow[];
+  const settings = await getSettings();
   const demo = isDemoMode();
   const testMode = env.testMode();
 
@@ -32,44 +27,13 @@ export default async function SettingsPage() {
     <div className="space-y-5">
       <PageHeader title="Settings" />
       <Card>
-        <SectionTitle>Shortlist</SectionTitle>
+        <SectionTitle>Automatic emails</SectionTitle>
         <SettingsForm initial={settings} defaults={DEFAULT_SETTINGS} />
       </Card>
 
-      <Card>
-        <SectionTitle hint="rubric_criteria table · from rubric/arjun_rubric.md">Rubric</SectionTitle>
-        {rubric.length === 0 ? (
-          <p className="text-sm text-rose-700">The rubric_criteria table is empty. Run npm run db:setup.</p>
-        ) : (
-          <div className="grid gap-4 lg:grid-cols-2">
-            {(["PM", "SPM"] as Role[]).map((role) => {
-              const rows = rubric.filter((r) => r.role === role);
-              return (
-                <div key={role}>
-                  <h3 className="mb-2 text-sm font-semibold text-slate-900">
-                    {role === "PM" ? "Product Manager" : "Senior Product Manager"} · {rows.reduce((s, r) => s + r.weight_pct, 0)}%
-                  </h3>
-                  <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
-                    {rows.map((r) => (
-                      <li key={r.id} className="p-3">
-                        <details>
-                          <summary className="flex cursor-pointer items-baseline justify-between gap-3 text-sm">
-                            <span>
-                              <span className="mr-1 text-xs font-semibold text-slate-400">{r.code}</span>
-                              <span className="font-medium text-slate-900">{r.name}</span>
-                            </span>
-                            <span className="shrink-0 font-semibold tabular-nums text-slate-900">{r.weight_pct}%</span>
-                          </summary>
-                          <p className="mt-2 text-xs leading-relaxed text-slate-600">{r.description}</p>
-                        </details>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              );
-            })}
-          </div>
-        )}
+      <Card className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-slate-700">Criteria, descriptions and weights are on the Rubric page.</p>
+        <Link href="/rubric" className="text-sm font-medium text-teal-700 hover:underline">Edit the rubric →</Link>
       </Card>
 
       <Card>
