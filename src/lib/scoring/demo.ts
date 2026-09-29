@@ -132,5 +132,5 @@ export async function demoScoreCv(opts: { candidateId: string; taggedRole: Role 
 
   // Mimic a little latency so the upload progress bar is visible.
   await new Promise((r) => setTimeout(r, 1200));
-  return { output, model: "demo-keyword-heuristic", usage: { input: 0, output: 0, cacheRead: 0 } };
+  return { output, model: "demo-keyword-heuristic" };
 }

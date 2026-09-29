@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isDemoMode } from "@/lib/demo/mode";
-import { resetDemoData } from "@/lib/demo/store";
+import { resetDemoData } from "@/lib/db/memory";
 
 export const runtime = "nodejs";
 

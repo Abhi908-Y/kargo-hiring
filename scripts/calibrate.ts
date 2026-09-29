@@ -1,25 +1,30 @@
 /**
  * Calibration check (rubric "Calibration check" section).
  *
- * Runs CVs through the same extract -> redact -> score -> route pipeline the app
- * uses, without touching the database or sending email.
+ * Runs CVs through the same extract -> redact -> score pipeline the app uses,
+ * without touching the database or sending email. The rubric says none of the
+ * eight retained hires should fall in its reject band: total below 40 with a
+ * pattern score below 30. If one does, the weights or anchors need adjusting.
  *
  *   npm run calibrate -- ./past-hires               # score as PM (the rubric's check)
  *   npm run calibrate -- ./past-hires --role SPM
  *   npm run calibrate -- ./past-hires --dry         # extract + redact only, no API calls
  *
  * Writes calibration/report.md, calibration/results.json and the exact redacted
- * text the AI saw to calibration/redacted/. Exits with code 1 if any CV is auto-rejected.
+ * text the AI saw to calibration/redacted/. Exits with code 1 if any CV lands in the reject band.
  */
 import { config as loadEnv } from "dotenv";
 import fs from "node:fs";
 import path from "node:path";
-import { DEFAULT_SETTINGS, type Role } from "../src/config/scoring";
+import { STRONG_PATTERN_MIN, type Role } from "../src/config/scoring";
 import { extractCvText, fileTypeFromName } from "../src/lib/extract";
 import { extractContact, redactCv } from "../src/lib/redact";
-import { routeCandidate, type RouteResult } from "../src/lib/routing";
+import { summariseScores, type ScoreSummary } from "../src/lib/scores";
 import type { ScoringOutput } from "../src/lib/scoring/schema";
 import { scoreCv } from "../src/lib/scoring/score";
+
+// The rubric's calibration bar (its original auto-reject rule).
+const REJECT_BELOW = 40;
 
 loadEnv({ path: ".env.local" });
 loadEnv();
@@ -47,7 +52,9 @@ interface Row {
   contact: ReturnType<typeof extractContact>;
   warning: string | null;
   leaks: string[];
-  route?: RouteResult;
+  score?: ScoreSummary;
+  total?: number;
+  rejectBand?: boolean;
   ai?: ScoringOutput;
   error?: string;
 }
@@ -94,14 +101,10 @@ async function main() {
     try {
       const { output } = await scoreCv({ candidateId: file, taggedRole, redactedText: redacted });
       row.ai = output;
-      row.route = routeCandidate({
-        scores: output.scores,
-        taggedRole,
-        aiFlags: output.flags,
-        extractionWarning: extraction.warning,
-        settings: DEFAULT_SETTINGS,
-      });
-      console.log(`${row.route.total}/100 (pattern ${row.route.pattern}) → ${row.route.band}${row.route.rescued ? " (rescued)" : ""}`);
+      row.score = summariseScores(output.scores, taggedRole);
+      row.total = row.score.totals[row.score.assignedRole];
+      row.rejectBand = row.total < REJECT_BELOW && row.score.pattern < STRONG_PATTERN_MIN;
+      console.log(`${row.total}/100 as ${row.score.assignedRole} (PM ${row.score.totals.PM}, SPM ${row.score.totals.SPM}, pattern ${row.score.pattern})${row.rejectBand ? " → REJECT BAND" : ""}`);
     } catch (e) {
       row.error = (e as Error).message;
       console.log(`ERROR: ${row.error}`);
@@ -115,14 +118,14 @@ async function main() {
   const lines = [
     `# Calibration report`,
     ``,
-    `Role: ${taggedRole ?? "untagged"} · Thresholds: reject < ${DEFAULT_SETTINGS.rejectBelow}, shortlist ≥ ${DEFAULT_SETTINGS.shortlistAt}, rescue pattern ≥ ${DEFAULT_SETTINGS.rescuePatternMin}`,
+    `Role: ${taggedRole ?? "untagged"} · Reject band: total < ${REJECT_BELOW} and pattern < ${STRONG_PATTERN_MIN}`,
     ``,
-    `| CV | A1 | A2 | A3 | A4 | A5 | Pattern | B1 PM | B1 SPM | B2 | Total | Band |`,
-    `|---|---|---|---|---|---|---|---|---|---|---|---|`,
+    `| CV | A1 | A2 | A3 | A4 | A5 | Pattern | B1 PM | B1 SPM | B2 | PM total | SPM total | Reject band? |`,
+    `|---|---|---|---|---|---|---|---|---|---|---|---|---|`,
     ...rows.map((r) =>
-      r.route
-        ? `| ${r.file} | ${dims.map((d) => r.route!.scores[d]).slice(0, 5).join(" | ")} | **${r.route.pattern}** | ${r.route.scores.B1_product_ownership_pm} | ${r.route.scores.B1_product_ownership_spm} | ${r.route.scores.B2_thrives_without_structure} | **${r.route.total}** | ${r.route.band}${r.route.rescued ? " (rescued)" : ""} |`
-        : `| ${r.file} | error: ${r.error} |||||||||||`,
+      r.score
+        ? `| ${r.file} | ${dims.map((d) => r.score!.scores[d]).slice(0, 5).join(" | ")} | **${r.score.pattern}** | ${r.score.scores.B1_product_ownership_pm} | ${r.score.scores.B1_product_ownership_spm} | ${r.score.scores.B2_thrives_without_structure} | **${r.score.totals.PM}** | **${r.score.totals.SPM}** | ${r.rejectBand ? "YES" : "no"} |`
+        : `| ${r.file} | error: ${r.error} ||||||||||||`,
     ),
     ``,
     `## Details`,
@@ -131,21 +134,21 @@ async function main() {
       `### ${r.file}`,
       r.leaks.length ? `**Redaction check:** possible leak (${r.leaks.join(", ")}). See calibration/redacted/${r.file}.txt` : `Redaction check: clean.`,
       r.warning ? `Extraction warning: ${r.warning}` : ``,
-      ...(r.route ? r.route.reasons.map((x) => `- ${x}`) : [`- ${r.error}`]),
+      ...(r.error ? [`- ${r.error}`] : []),
       ...(r.ai ? [``, r.ai.brief.who_they_are, ``, ...dims.map((d) => `- **${d}** ${r.ai!.scores[d].score} (${r.ai!.scores[d].status}): ${r.ai!.scores[d].evidence}`)] : []),
     ]),
   ];
   fs.writeFileSync(path.join(outDir, "report.md"), lines.join("\n"));
 
-  const rejected = rows.filter((r) => r.route?.band === "auto_reject");
+  const rejected = rows.filter((r) => r.rejectBand);
   const failed = rows.filter((r) => r.error);
   console.log(`\nReport: calibration/report.md`);
-  console.log(`Auto-rejected: ${rejected.length} of ${rows.length}${failed.length ? ` · errors: ${failed.length}` : ""}`);
+  console.log(`In the reject band: ${rejected.length} of ${rows.length}${failed.length ? ` · errors: ${failed.length}` : ""}`);
   if (rejected.length) {
     console.log(`CALIBRATION FAILED: ${rejected.map((r) => r.file).join(", ")}`);
     process.exitCode = 1;
   } else if (!failed.length) {
-    console.log("CALIBRATION PASSED: no past hire was auto-rejected.");
+    console.log("CALIBRATION PASSED: no past hire is in the reject band.");
   }
 }
 

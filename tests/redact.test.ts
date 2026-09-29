@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { extractContact, redactCv } from "../src/lib/redact";
-import { buildEmail, cleanPersonalLine } from "../src/lib/emails/templates";
+import { draftProblems, personalise, templateDraft, REJECTION_SENTENCE } from "../src/lib/drafting/draft";
+import type { Candidate } from "../src/lib/types";
 
 const CV = `PRIYA SHARMA
 Mumbai, India | +91 98765 43210 | priya.sharma@gmail.com
@@ -58,24 +59,27 @@ describe("redaction", () => {
   });
 });
 
-describe("emails", () => {
-  it("rejection has no reasons and uses the agreed sentence", () => {
-    const e = buildEmail({ kind: "rejection", firstName: "Priya", role: "PM", calendarLink: "x", personalLine: "Your tracker was great." });
-    expect(e.text).toContain("Unfortunately we're not able to take it forward at this stage.");
-    expect(e.text).not.toContain("tracker");
-    expect(e.text).toContain("Arjun Mehta");
+describe("email drafts", () => {
+  const cand = { assigned_role: "PM", tagged_role: "PM", personal_line: "Your weekend tracker stood out to me." } as unknown as Candidate;
+
+  it("fills in the real first name and calendar link", () => {
+    const text = personalise("Hi [NAME],\nPick a slot: {calendar_link}", "Priya", "https://cal.com/arjun");
+    expect(text).toBe("Hi Priya,\nPick a slot: https://cal.com/arjun");
+    expect(personalise("Hi [NAME],", null, "x")).toBe("Hi there,");
   });
 
-  it("shortlist includes calendar link and personal line", () => {
-    const e = buildEmail({ kind: "shortlist", firstName: null, role: "SPM", calendarLink: "https://cal.com/arjun", personalLine: "Your exception dashboard stood out to me" });
-    expect(e.text).toContain("Hi there,");
-    expect(e.text).toContain("Senior Product Manager");
-    expect(e.text).toContain("https://cal.com/arjun");
-    expect(e.text).toContain("Your exception dashboard stood out to me.");
+  it("standard drafts pass the safety checks", () => {
+    expect(draftProblems(templateDraft(cand, "invite"), "invite")).toEqual([]);
+    expect(draftProblems(templateDraft(cand, "rejection"), "rejection")).toEqual([]);
+    expect(templateDraft(cand, "rejection").body).toContain(REJECTION_SENTENCE);
   });
 
-  it("drops a personal line with placeholders or over 25 words", () => {
-    expect(cleanPersonalLine("Your work at [NAME] was good")).toBeNull();
-    expect(cleanPersonalLine(Array(30).fill("word").join(" "))).toBeNull();
+  it("rejects unsafe AI drafts", () => {
+    const ok = { subject: "Hi", body: `Hi [NAME],
+${REJECTION_SENTENCE}`, interview_brief: "" };
+    expect(draftProblems({ ...ok, body: "Hi Priya, " + REJECTION_SENTENCE }, "rejection")).toContain("no [NAME] placeholder");
+    expect(draftProblems({ ...ok, body: ok.body + " [EMAIL]" }, "rejection")[0]).toMatch(/unexpected placeholder/);
+    expect(draftProblems({ ...ok, body: ok.body + " {calendar_link}" }, "rejection")).toContain("rejection contains the calendar link");
+    expect(draftProblems({ ...ok, body: "Hi [NAME], see you" }, "invite")).toContain("invite has no calendar link");
   });
 });

@@ -1,60 +1,37 @@
-import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { isDemoMode } from "@/lib/demo/mode";
 import { isAdminEmail } from "@/lib/env";
+import { authConfigured, SESSION_COOKIE, verifySessionToken } from "@/lib/session";
 
-// Refreshes the Supabase session and keeps everything except /login behind
-// Arjun's account. Pages and API routes check again on their own.
-export async function proxy(request: NextRequest) {
-  let response = NextResponse.next({ request });
+// Keeps everything except /login behind Arjun's account.
+// Pages and API routes check the session again on their own.
+export function proxy(request: NextRequest) {
+  const path = request.nextUrl.pathname;
+  const isPublic = path === "/login" || path.startsWith("/api/auth/");
 
   if (isDemoMode()) {
     // Local demo: no login. isDemoMode() is always false on Vercel.
-    if (request.nextUrl.pathname === "/login") return NextResponse.redirect(new URL("/", request.url));
-    return response;
+    if (path === "/login") return NextResponse.redirect(new URL("/", request.url));
+    return NextResponse.next();
   }
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const path = request.nextUrl.pathname;
-  const isPublic = path === "/login" || path.startsWith("/auth/");
-
-  if (!url || !key) {
-    if (isPublic) return response;
+  if (!authConfigured() || !process.env.DATABASE_URL) {
+    if (isPublic) return NextResponse.next();
     return new NextResponse(
-      "Supabase is not configured yet. Add the keys listed in .env.example: on Vercel under Project → Settings → Environment Variables (then redeploy), or locally in .env.local.",
+      "Not configured yet. Add DATABASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD and SESSION_SECRET (see .env.example): on Vercel under Project → Settings → Environment Variables (then redeploy), or locally in .env.local.",
       { status: 500 },
     );
   }
 
-  const supabase = createServerClient(url, key, {
-    cookies: {
-      getAll: () => request.cookies.getAll(),
-      setAll: (toSet) => {
-        toSet.forEach(({ name, value }) => request.cookies.set(name, value));
-        response = NextResponse.next({ request });
-        toSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
-      },
-    },
-  });
-
-  const { data } = await supabase.auth.getUser();
-  const allowed = isAdminEmail(data.user?.email);
+  const email = verifySessionToken(request.cookies.get(SESSION_COOKIE)?.value);
+  const allowed = isAdminEmail(email);
 
   if (!allowed && !isPublic) {
     if (path.startsWith("/api/")) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
-    const login = request.nextUrl.clone();
-    login.pathname = "/login";
-    login.search = data.user ? "?error=not_allowed" : "";
-    return NextResponse.redirect(login);
+    return NextResponse.redirect(new URL("/login", request.url));
   }
-  if (allowed && path === "/login") {
-    const home = request.nextUrl.clone();
-    home.pathname = "/";
-    home.search = "";
-    return NextResponse.redirect(home);
-  }
-  return response;
+  if (allowed && path === "/login") return NextResponse.redirect(new URL("/", request.url));
+  return NextResponse.next();
 }
 
 export const config = {

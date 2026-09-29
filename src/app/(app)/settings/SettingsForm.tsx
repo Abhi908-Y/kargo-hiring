@@ -6,67 +6,47 @@ import type { Settings } from "@/config/scoring";
 
 export function SettingsForm({ initial, defaults }: { initial: Settings; defaults: Settings }) {
   const router = useRouter();
-  const [s, setS] = useState(initial);
+  const [topN, setTopN] = useState(String(initial.topN));
+  const [calendarLink, setCalendarLink] = useState(initial.calendarLink);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function post(body: object) {
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
     setBusy(true);
     setMsg(null);
-    const res = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topN: Number(topN), calendarLink }),
+    });
     const data = await res.json().catch(() => ({}));
     setBusy(false);
     if (!res.ok) return setMsg({ ok: false, text: data.error ?? "Couldn't save." });
-    setS(data.settings);
-    setMsg({ ok: true, text: "Saved." });
+    setMsg({ ok: true, text: "Saved. If the top list changed, use \"Write drafts now\" on the dashboard." });
     router.refresh();
   }
 
-  const num = (key: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement>) => setS({ ...s, [key]: e.target.value === "" ? "" : Number(e.target.value) });
-  const input = "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 tabular-nums outline-none focus:border-teal-600";
-
+  const input = "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-teal-600";
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        post(s);
-      }}
-      className="space-y-5"
-    >
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Auto-reject below" hint={`Total under this is auto-rejected, unless rescued. Default ${defaults.rejectBelow}.`}>
-          <input type="number" min={0} max={99} value={s.rejectBelow} onChange={num("rejectBelow")} className={input} />
-        </Field>
-        <Field label="Auto-shortlist at or above" hint={`Default ${defaults.shortlistAt}. Everything in between goes to review.`}>
-          <input type="number" min={1} max={100} value={s.shortlistAt} onChange={num("shortlistAt")} className={input} />
-        </Field>
-        <Field label="Rescue: pattern score at or above" hint={`Never auto-reject when the pattern score (out of 60) is this high. Default ${defaults.rescuePatternMin}.`}>
-          <input type="number" min={0} max={60} value={s.rescuePatternMin} onChange={num("rescuePatternMin")} className={input} />
-        </Field>
-        <Field label="Hold automatic emails for (hours)" hint={`Undo window before auto emails send. Default ${defaults.holdHours}.`}>
-          <input type="number" min={0.25} max={72} step={0.25} value={s.holdHours} onChange={num("holdHours")} className={input} />
-        </Field>
-      </div>
-      <Field label="Interview calendar link" hint="Goes in shortlist emails, e.g. https://cal.com/arjun/interview. Shortlists are held in review until this is a real link (when test mode is off).">
-        <input type="text" value={s.calendarLink} onChange={(e) => setS({ ...s, calendarLink: e.target.value })} className={input} placeholder="https://…" />
-      </Field>
-
-      <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-        With these values: under <b>{s.rejectBelow}</b> auto-reject (unless pattern ≥ <b>{s.rescuePatternMin}</b>), <b>{s.rejectBelow}</b>–<b>{Number(s.shortlistAt) - 1}</b> review,{" "}
-        <b>{s.shortlistAt}</b>+ auto-shortlist. Auto emails wait <b>{s.holdHours}h</b>.
-      </div>
-
+    <form onSubmit={save} className="space-y-4">
+      <label className="block max-w-xs">
+        <span className="text-sm font-medium text-slate-800">Top candidates per role</span>
+        <input type="number" min={1} max={100} value={topN} onChange={(e) => setTopN(e.target.value)} className={`${input} tabular-nums`} />
+        <span className="mt-1 block text-xs text-slate-500">
+          These get an interview brief and an invite draft. Everyone else gets a rejection draft. Default {defaults.topN}.
+        </span>
+      </label>
+      <label className="block">
+        <span className="text-sm font-medium text-slate-800">Interview calendar link</span>
+        <input type="text" value={calendarLink} onChange={(e) => setCalendarLink(e.target.value)} placeholder="https://cal.com/arjun/interview" className={input} />
+        <span className="mt-1 block text-xs text-slate-500">
+          Fills <code>{"{calendar_link}"}</code> in invite emails. With test mode off, invites can&apos;t be sent until this is a real link.
+        </span>
+      </label>
       <div className="flex flex-wrap items-center gap-3">
         <button disabled={busy} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
-          {busy ? "Saving…" : "Save settings"}
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => window.confirm("Reset all thresholds to the rubric defaults?") && post({ reset: true })}
-          className="text-sm font-medium text-slate-500 hover:text-slate-900"
-        >
-          Reset to defaults
+          {busy ? "Saving…" : "Save"}
         </button>
         {msg && <span className={msg.ok ? "text-sm text-emerald-700" : "text-sm text-rose-700"}>{msg.text}</span>}
       </div>
@@ -93,15 +73,5 @@ export function ResetDemoButton() {
     >
       {busy ? "Resetting…" : "Reset demo data"}
     </button>
-  );
-}
-
-function Field({ label, hint, children }: { label: string; hint: string; children: React.ReactNode }) {
-  return (
-    <label className="block">
-      <span className="text-sm font-medium text-slate-800">{label}</span>
-      {children}
-      <span className="mt-1 block text-xs text-slate-500">{hint}</span>
-    </label>
   );
 }

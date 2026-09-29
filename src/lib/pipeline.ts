@@ -1,23 +1,30 @@
 import "server-only";
 import crypto from "node:crypto";
-import { type Role, type Settings } from "@/config/scoring";
-import { buildEmail, isCalendarPlaceholder, type EmailKind } from "@/lib/emails/templates";
-import { cancelScheduledEmail, deliverEmail } from "@/lib/emails/send";
+import type { Role } from "@/config/scoring";
+import { db } from "@/lib/db";
+import { isDemoMode } from "@/lib/demo/mode";
+import { demoDraftEmail } from "@/lib/drafting/demo";
+import { draftEmail, LINK_TOKEN, NAME_TOKEN, personalise } from "@/lib/drafting/draft";
+import { deliverEmail } from "@/lib/emails/send";
+import { isCalendarPlaceholder } from "@/lib/emails/templates";
 import { env } from "@/lib/env";
 import { extractCvText, fileTypeFromName, MAX_FILE_BYTES } from "@/lib/extract";
+import { desiredDraftKind, rankCandidates, type DraftKind, type Ranking } from "@/lib/ranking";
 import { extractContact, normaliseForHash, redactCv } from "@/lib/redact";
-import { routeCandidate } from "@/lib/routing";
-import { isDemoMode } from "@/lib/demo/mode";
+import { summariseScores } from "@/lib/scores";
 import { demoScoreCv } from "@/lib/scoring/demo";
 import { scoreCv } from "@/lib/scoring/score";
 import { getSettings } from "@/lib/settings";
-import { CV_BUCKET, db } from "@/lib/supabase/server";
-import type { Candidate, EmailRow, Stage } from "@/lib/types";
+import type { Candidate } from "@/lib/types";
+
+// The pipeline: upload -> (1) score both rubrics -> (2) interview brief for the
+// top N per role -> (3) email draft for everyone -> (4) Arjun confirms and sends.
 
 export type Result<T = object> = ({ ok: true } & T) | { ok: false; status: number; error: string };
 
 const sha256 = (data: Uint8Array | string) => crypto.createHash("sha256").update(data).digest("hex");
 const nowIso = () => new Date().toISOString();
+const demoAiActive = () => isDemoMode() && !process.env.GEMINI_API_KEY;
 
 export async function logEvent(candidateId: string, action: string, detail?: string) {
   await db().from("candidate_events").insert({ candidate_id: candidateId, action, detail: detail ?? null });
@@ -28,8 +35,25 @@ export async function getCandidate(id: string): Promise<Candidate | null> {
   return (data as Candidate) ?? null;
 }
 
+export async function allCandidates(): Promise<Candidate[]> {
+  const { data } = await db().from("candidates").select("*").order("created_at", { ascending: true });
+  return (data ?? []) as Candidate[];
+}
+
+export async function currentRanking(candidates?: Candidate[]): Promise<{ ranking: Ranking; candidates: Candidate[] }> {
+  const [list, settings] = await Promise.all([candidates ?? allCandidates(), getSettings()]);
+  return { ranking: rankCandidates(list.filter((c) => c.stage !== "processing"), settings.topN), candidates: list };
+}
+
+/** Scored, unsent candidates whose draft is missing or no longer matches their rank. Edited drafts are left alone. */
+export function staleDrafts(candidates: Candidate[], ranking: Ranking): Candidate[] {
+  return candidates
+    .filter((c) => c.stage === "scored" && c.draft_source !== "edited" && c.draft_kind !== desiredDraftKind(c.id, ranking))
+    .sort((a, b) => Number(ranking.top.has(b.id)) - Number(ranking.top.has(a.id))); // invites first
+}
+
 // ---------------------------------------------------------------------------
-// 1. Upload: extract, dedupe, redact, store
+// Upload: extract, skip duplicates, separate personal details, store
 // ---------------------------------------------------------------------------
 
 export async function ingestCv(opts: {
@@ -64,18 +88,12 @@ export async function ingestCv(opts: {
   }
 
   const redacted = redactCv(extraction.text, contact, opts.fileName);
-
   const id = crypto.randomUUID();
-  const safeName = opts.fileName.replace(/[^\w.\-]+/g, "_").slice(-120);
-  const filePath = `${id}/${safeName}`;
-  const upload = await db()
-    .storage.from(CV_BUCKET)
-    .upload(filePath, opts.bytes, {
-      contentType:
-        type === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      upsert: false,
-    });
-  if (upload.error) return { ok: false, status: 500, error: `File storage failed: ${upload.error.message}` };
+  const filePath = `${id}/${opts.fileName.replace(/[^\w.\-]+/g, "_").slice(-120)}`;
+  const contentType =
+    type === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const stored = await db().files.put(filePath, opts.bytes, contentType);
+  if (stored) return { ok: false, status: 500, error: `File storage failed: ${stored.message}` };
 
   const { error } = await db().from("candidates").insert({
     id,
@@ -94,7 +112,7 @@ export async function ingestCv(opts: {
     stage: "processing",
   });
   if (error) {
-    await db().storage.from(CV_BUCKET).remove([filePath]);
+    await db().files.remove(filePath);
     if (error.code === "23505") return duplicate("this CV was uploaded at the same moment by another request");
     return { ok: false, status: 500, error: error.message };
   }
@@ -108,68 +126,46 @@ function duplicate(reason: string): Result<never> {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Score + route (+ schedule auto emails)
+// Step 1: score against both rubrics
 // ---------------------------------------------------------------------------
 
-export async function scoreAndRoute(id: string): Promise<Result<{ candidate: Candidate }>> {
+export async function scoreCandidate(id: string): Promise<Result<{ candidate: Candidate }>> {
   const c = await getCandidate(id);
   if (!c) return { ok: false, status: 404, error: "Candidate not found." };
-  if (c.stage !== "processing" && c.stage !== "review")
-    return { ok: false, status: 409, error: "This candidate already has a decision in progress." };
-
-  const settings = await getSettings();
+  if (c.stage === "sent") return { ok: false, status: 409, error: "An email was already sent to this candidate." };
 
   let scored;
   try {
-    const scorer = isDemoMode() && !process.env.GEMINI_API_KEY ? demoScoreCv : scoreCv;
+    const scorer = demoAiActive() ? demoScoreCv : scoreCv;
     scored = await scorer({ candidateId: c.id, taggedRole: c.tagged_role, redactedText: c.redacted_text });
   } catch (e) {
     const message = (e as Error).message;
-    await db()
-      .from("candidates")
-      .update({
-        stage: "review",
-        band: "review",
-        scoring_error: message,
-        route_reasons: ["Scoring failed, so this CV needs a manual look. Use \"Retry scoring\" or decide from the CV."],
-        updated_at: nowIso(),
-      })
-      .eq("id", id);
+    await db().from("candidates").update({ scoring_error: message, updated_at: nowIso() }).eq("id", id);
     await logEvent(id, "scoring_failed", message);
     return { ok: true, candidate: (await getCandidate(id))! };
   }
 
   const ai = scored.output;
-  const route = routeCandidate({
-    scores: ai.scores,
-    taggedRole: c.tagged_role,
-    aiFlags: ai.flags,
-    extractionWarning: c.extraction_warning,
-    settings,
-  });
-
+  const s = summariseScores(ai.scores, c.tagged_role);
   const flags = new Set(ai.flags.map((f) => f.trim()).filter(Boolean));
   if (c.extraction_warning) flags.add("low_extraction_confidence");
-
   const dimensionScores = Object.fromEntries(
-    Object.entries(ai.scores).map(([k, v]) => [k, { ...v, score: route.scores[k as keyof typeof route.scores] }]),
+    Object.entries(ai.scores).map(([k, v]) => [k, { ...v, score: s.scores[k as keyof typeof s.scores] }]),
   );
 
   const { error } = await db()
     .from("candidates")
     .update({
-      stage: "review",
-      band: route.band,
-      route_reasons: route.reasons,
-      rescued: route.rescued,
-      assigned_role: route.assignedRole,
-      role_source: route.roleSource,
+      stage: "scored",
+      assigned_role: s.assignedRole,
+      role_source: s.roleSource,
       role_reasoning: ai.role_reasoning,
-      role_mismatch: route.roleMismatch,
-      pattern_score: route.pattern,
-      role_fit_score: route.roleFit,
-      total_score: route.total,
-      total_other_role: route.totalOtherRole,
+      role_mismatch: s.roleMismatch,
+      pattern_score: s.pattern,
+      score_pm: s.totals.PM,
+      score_spm: s.totals.SPM,
+      total_score: s.totals[s.assignedRole],
+      strong_pattern: s.strongPattern,
       dimension_scores: dimensionScores,
       brief: ai.brief,
       personal_line: ai.personal_line,
@@ -178,219 +174,164 @@ export async function scoreAndRoute(id: string): Promise<Result<{ candidate: Can
       model: scored.model,
       scored_at: nowIso(),
       scoring_error: null,
+      // A fresh score means a fresh draft.
+      interview_brief: null,
+      draft_kind: null,
+      draft_subject: null,
+      draft_body: null,
+      draft_source: null,
+      draft_error: null,
+      drafted_at: null,
       updated_at: nowIso(),
     })
     .eq("id", id);
   if (error) return { ok: false, status: 500, error: error.message };
-  await logEvent(id, "scored", `Total ${route.total} (pattern ${route.pattern}, role fit ${route.roleFit}) as ${route.assignedRole}: ${route.band}`);
-
-  if (route.band !== "review") {
-    const kind: EmailKind = route.band === "auto_reject" ? "rejection" : "shortlist";
-    const blocker = autoSendBlocker(await getCandidate(id), kind, settings);
-    if (blocker) {
-      await appendReason(id, `Moved to review instead of auto-${kind === "rejection" ? "reject" : "shortlist"}: ${blocker}`);
-    } else {
-      const scheduledAt = new Date(Date.now() + settings.holdHours * 3600_000);
-      try {
-        await createAndDeliverEmail({ candidate: (await getCandidate(id))!, kind, trigger: "auto", scheduledAt, settings });
-        const stage: Stage = kind === "rejection" ? "reject_pending" : "shortlist_pending";
-        await db()
-          .from("candidates")
-          .update({ stage, decided_by: "auto", decided_at: nowIso(), email_scheduled_for: scheduledAt.toISOString(), updated_at: nowIso() })
-          .eq("id", id)
-          .eq("stage", "review");
-        await logEvent(id, `auto_${kind}_scheduled`, `Email held until ${scheduledAt.toISOString()}`);
-      } catch (e) {
-        await appendReason(id, `Moved to review: the ${kind} email couldn't be scheduled (${(e as Error).message}).`);
-      }
-    }
-  }
-
+  await logEvent(id, "scored", `PM ${s.totals.PM}/100, SPM ${s.totals.SPM}/100; ranked as ${s.assignedRole}`);
   return { ok: true, candidate: (await getCandidate(id))! };
 }
 
-function autoSendBlocker(c: Candidate | null, kind: EmailKind, settings: Settings): string | null {
-  if (!c) return "candidate disappeared";
-  if (!c.email) return "no email address was found in the CV. Add one on this page.";
-  if (kind === "shortlist" && !env.testMode() && isCalendarPlaceholder(settings.calendarLink))
-    return "the calendar link isn't set yet (Settings).";
-  return null;
-}
+// ---------------------------------------------------------------------------
+// Steps 2 + 3: interview brief (top N) and email draft (everyone)
+// ---------------------------------------------------------------------------
 
-async function appendReason(id: string, reason: string) {
-  const c = await getCandidate(id);
+async function writeDraft(c: Candidate, kind: DraftKind) {
+  const drafter = demoAiActive() ? demoDraftEmail : draftEmail;
+  const { draft, source, error } = await drafter(c, kind);
   await db()
     .from("candidates")
-    .update({ route_reasons: [...(c?.route_reasons ?? []), reason], updated_at: nowIso() })
-    .eq("id", id);
+    .update({
+      draft_kind: kind,
+      draft_subject: draft.subject.trim(),
+      draft_body: draft.body.trim(),
+      draft_source: source,
+      draft_error: error,
+      interview_brief: kind === "invite" ? draft.interview_brief.trim() || null : null,
+      drafted_at: nowIso(),
+      updated_at: nowIso(),
+    })
+    .eq("id", c.id)
+    .eq("stage", "scored");
+  await logEvent(c.id, `${kind}_drafted`, source === "ai" ? "Drafted by AI" : error ?? "Standard wording");
+}
+
+/** Draft the next stale candidate. The upload page calls this repeatedly until remaining is 0. */
+export async function refreshNextDraft(): Promise<{ drafted: string | null; remaining: number }> {
+  const { ranking, candidates } = await currentRanking();
+  const stale = staleDrafts(candidates, ranking);
+  if (!stale.length) return { drafted: null, remaining: 0 };
+  const next = stale[0];
+  await writeDraft(next, desiredDraftKind(next.id, ranking));
+  return { drafted: next.id, remaining: stale.length - 1 };
+}
+
+export async function regenerateDraft(id: string): Promise<Result> {
+  const { ranking, candidates } = await currentRanking();
+  const c = candidates.find((x) => x.id === id);
+  if (!c) return { ok: false, status: 404, error: "Candidate not found." };
+  if (c.stage !== "scored") return { ok: false, status: 409, error: c.stage === "sent" ? "Already sent." : "Not scored yet." };
+  await writeDraft(c, desiredDraftKind(id, ranking));
+  return { ok: true };
+}
+
+export async function saveDraft(id: string, input: { subject: string; body: string; kind?: DraftKind }): Promise<Result> {
+  const subject = input.subject.trim();
+  const body = input.body.trim();
+  if (!subject || !body) return { ok: false, status: 400, error: "Subject and body can't be empty." };
+  const { data } = await db()
+    .from("candidates")
+    .update({
+      draft_subject: subject,
+      draft_body: body,
+      draft_source: "edited",
+      ...(input.kind ? { draft_kind: input.kind } : {}),
+      updated_at: nowIso(),
+    })
+    .eq("id", id)
+    .eq("stage", "scored")
+    .select("id");
+  if (!data?.length) return { ok: false, status: 409, error: "This draft can't be edited (already sent or not scored)." };
+  await logEvent(id, "draft_edited");
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
-// Emails
+// Step 4: Arjun clicks Confirm & send
 // ---------------------------------------------------------------------------
 
-export function previewEmail(c: Candidate, kind: EmailKind, settings: Settings) {
-  return buildEmail({
-    kind,
-    firstName: c.first_name,
-    role: c.assigned_role ?? c.tagged_role ?? "PM",
-    calendarLink: settings.calendarLink,
-    personalLine: c.personal_line,
-  });
-}
+export async function sendDraft(id: string): Promise<Result> {
+  const c = await getCandidate(id);
+  if (!c) return { ok: false, status: 404, error: "Candidate not found." };
+  if (c.stage === "sent") return { ok: false, status: 409, error: "Already sent." };
+  if (c.stage !== "scored" || !c.draft_body || !c.draft_subject || !c.draft_kind)
+    return { ok: false, status: 409, error: "There's no draft to send yet." };
+  if (!c.email) return { ok: false, status: 400, error: "No email address. Add one on the candidate page." };
 
-async function createAndDeliverEmail(opts: {
-  candidate: Candidate;
-  kind: EmailKind;
-  trigger: "auto" | "arjun";
-  scheduledAt?: Date;
-  settings: Settings;
-}): Promise<EmailRow> {
-  const c = opts.candidate;
-  if (!c.email) throw new Error("no email address");
-  const content = previewEmail(c, opts.kind, opts.settings);
+  const settings = await getSettings();
+  if (c.draft_kind === "invite" && !env.testMode() && isCalendarPlaceholder(settings.calendarLink))
+    return { ok: false, status: 400, error: "Set the interview calendar link in Settings before sending invites." };
+
+  const subject = personalise(c.draft_subject, c.first_name, settings.calendarLink);
+  const text = personalise(c.draft_body, c.first_name, settings.calendarLink);
+  if (subject.includes(NAME_TOKEN) || text.includes(NAME_TOKEN))
+    return { ok: false, status: 400, error: "The draft still contains [NAME]." };
+  if (!env.testMode() && text.includes(LINK_TOKEN))
+    return { ok: false, status: 400, error: "The draft still contains {calendar_link}." };
+
+  // Claim atomically so a double-click can't send two emails.
+  const { data: claimed } = await db()
+    .from("candidates")
+    .update({ stage: "sent", sent_at: nowIso(), updated_at: nowIso() })
+    .eq("id", id)
+    .eq("stage", "scored")
+    .select("id");
+  if (!claimed?.length) return { ok: false, status: 409, error: "This candidate was just updated. Refresh the page." };
 
   const { data: row, error } = await db()
     .from("emails")
     .insert({
-      candidate_id: c.id,
-      kind: opts.kind,
-      trigger: opts.trigger,
+      candidate_id: id,
+      kind: c.draft_kind,
       intended_to: c.email,
       test_mode: env.testMode(),
-      subject: content.subject,
-      body_text: content.text,
-      body_html: content.html,
+      subject,
+      body_text: text,
+      body_html: "",
       status: "queued",
-      scheduled_for: opts.scheduledAt?.toISOString() ?? null,
     })
     .select("*")
     .single();
-  if (error || !row) throw new Error(error?.message ?? "could not record email");
 
   try {
-    const result = await deliverEmail({
-      intendedTo: c.email,
-      content,
-      scheduledAt: opts.scheduledAt,
-      idempotencyKey: row.id,
-    });
-    const simulated = result.status === "simulated";
-    const { data: updated } = await db()
+    if (error || !row) throw new Error(error?.message ?? "could not record the email");
+    const result = await deliverEmail({ intendedTo: c.email, subject, text, idempotencyKey: row.id });
+    await db()
       .from("emails")
       .update({
-        status: opts.scheduledAt ? "scheduled" : "sent",
-        simulated,
-        sent_at: opts.scheduledAt ? null : nowIso(),
+        status: "sent",
+        simulated: result.status === "simulated",
+        sent_at: nowIso(),
         resend_id: result.resendId,
         delivered_to: result.deliveredTo,
         from_address: result.fromAddress,
         subject: result.subject,
+        body_text: result.text,
+        body_html: result.html,
       })
-      .eq("id", row.id)
-      .select("*")
-      .single();
-    return updated as EmailRow;
+      .eq("id", row.id);
   } catch (e) {
-    await db().from("emails").update({ status: "failed", error: (e as Error).message }).eq("id", row.id);
-    throw e;
+    const message = (e as Error).message;
+    if (row) await db().from("emails").update({ status: "failed", error: message }).eq("id", row.id);
+    await db().from("candidates").update({ stage: "scored", sent_at: null, updated_at: nowIso() }).eq("id", id);
+    return { ok: false, status: 502, error: `Email failed, nothing was sent: ${message}` };
   }
+
+  await logEvent(id, `${c.draft_kind}_sent`, "Confirmed by Arjun");
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
-// 3. Arjun's decisions
-// ---------------------------------------------------------------------------
 
-export async function decide(id: string, action: "approve" | "reject"): Promise<Result<{ candidate: Candidate }>> {
-  const c = await getCandidate(id);
-  if (!c) return { ok: false, status: 404, error: "Candidate not found." };
-  if (c.stage === "reject_pending" || c.stage === "shortlist_pending")
-    return { ok: false, status: 409, error: "An email is already scheduled. Use Undo first." };
-  if (c.stage !== "review") return { ok: false, status: 409, error: "This candidate already has a final decision." };
-  if (!c.email) return { ok: false, status: 400, error: "Add the candidate's email address first." };
-
-  const settings = await getSettings();
-  const kind: EmailKind = action === "approve" ? "shortlist" : "rejection";
-  if (kind === "shortlist" && !env.testMode() && isCalendarPlaceholder(settings.calendarLink))
-    return { ok: false, status: 400, error: "Set the calendar link in Settings before shortlisting." };
-
-  const target: Stage = action === "approve" ? "shortlisted" : "rejected";
-  // Claim the candidate atomically so a double-click can't send two emails.
-  const { data: claimed } = await db()
-    .from("candidates")
-    .update({ stage: target, decided_by: "arjun", decided_at: nowIso(), email_scheduled_for: null, updated_at: nowIso() })
-    .eq("id", id)
-    .eq("stage", "review")
-    .select("id");
-  if (!claimed?.length) return { ok: false, status: 409, error: "This candidate was just updated. Refresh the page." };
-
-  try {
-    await createAndDeliverEmail({ candidate: c, kind, trigger: "arjun", settings });
-  } catch (e) {
-    await db()
-      .from("candidates")
-      .update({ stage: "review", decided_by: null, decided_at: null, updated_at: nowIso() })
-      .eq("id", id);
-    return { ok: false, status: 502, error: `Email failed, nothing was sent: ${(e as Error).message}` };
-  }
-
-  await logEvent(id, action === "approve" ? "approved" : "rejected", "Decision by Arjun; email sent immediately");
-  return { ok: true, candidate: (await getCandidate(id))! };
-}
-
-export async function undo(id: string): Promise<Result<{ candidate: Candidate }>> {
-  const c = await getCandidate(id);
-  if (!c) return { ok: false, status: 404, error: "Candidate not found." };
-  if (c.stage !== "reject_pending" && c.stage !== "shortlist_pending")
-    return { ok: false, status: 409, error: "There's no scheduled email to undo." };
-  if (c.email_scheduled_for && new Date(c.email_scheduled_for).getTime() <= Date.now())
-    return { ok: false, status: 409, error: "Too late: the email has already gone out." };
-
-  const { data: email } = await db()
-    .from("emails")
-    .select("*")
-    .eq("candidate_id", id)
-    .eq("status", "scheduled")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const cancelError = await cancelScheduledEmail((email as EmailRow | null)?.resend_id ?? null);
-  if (cancelError) return { ok: false, status: 409, error: `Couldn't cancel the email: ${cancelError}` };
-
-  if (email) await db().from("emails").update({ status: "cancelled", cancelled_at: nowIso() }).eq("id", email.id);
-  await db()
-    .from("candidates")
-    .update({
-      stage: "review",
-      decided_by: null,
-      decided_at: null,
-      email_scheduled_for: null,
-      route_reasons: [...c.route_reasons, "Undo by Arjun: email cancelled and moved to review."],
-      updated_at: nowIso(),
-    })
-    .eq("id", id);
-  await logEvent(id, "undo", "Scheduled email cancelled; moved to review");
-  return { ok: true, candidate: (await getCandidate(id))! };
-}
-
-/** Mark held emails whose time has passed as sent. Called on page loads (no cron needed). */
-export async function finalizeDue(): Promise<void> {
-  const now = nowIso();
-  await Promise.all([
-    db().from("candidates").update({ stage: "rejected" }).eq("stage", "reject_pending").lte("email_scheduled_for", now),
-    db().from("candidates").update({ stage: "shortlisted" }).eq("stage", "shortlist_pending").lte("email_scheduled_for", now),
-  ]);
-  const { data: due } = await db().from("emails").select("id, scheduled_for").eq("status", "scheduled").lte("scheduled_for", now);
-  await Promise.all(
-    (due ?? []).map((e) => db().from("emails").update({ status: "sent", sent_at: e.scheduled_for }).eq("id", e.id)),
-  );
-}
-
-export async function updateContact(
-  id: string,
-  input: { fullName?: string; email?: string },
-): Promise<Result<{ candidate: Candidate }>> {
+export async function updateContact(id: string, input: { fullName?: string; email?: string }): Promise<Result> {
   const patch: Record<string, string | null> = { updated_at: nowIso() };
   if (input.fullName !== undefined) {
     const name = input.fullName.trim().replace(/\s+/g, " ");
@@ -408,11 +349,9 @@ export async function updateContact(
     return { ok: false, status: 500, error: error.message };
   }
   await logEvent(id, "contact_updated");
-  return { ok: true, candidate: (await getCandidate(id))! };
+  return { ok: true };
 }
 
-export async function cvDownloadUrl(c: Candidate): Promise<string | null> {
-  if (!c.file_path) return null;
-  const { data } = await db().storage.from(CV_BUCKET).createSignedUrl(c.file_path, 300, { download: c.file_name });
-  return data?.signedUrl ?? null;
+export async function cvFile(c: Candidate) {
+  return c.file_path ? db().files.get(c.file_path) : null;
 }

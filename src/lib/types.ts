@@ -1,14 +1,8 @@
 import type { DimensionKey, Role } from "@/config/scoring";
-import type { Band } from "@/lib/routing";
+import type { DraftKind } from "@/lib/ranking";
 import type { DimensionScore } from "@/lib/scoring/schema";
 
-export type Stage =
-  | "processing"
-  | "review"
-  | "reject_pending"
-  | "shortlist_pending"
-  | "rejected"
-  | "shortlisted";
+export type Stage = "processing" | "scored" | "sent";
 
 export interface Brief {
   who_they_are: string;
@@ -31,17 +25,15 @@ export interface Candidate {
   extraction_warning: string | null;
   tagged_role: Role | null;
   stage: Stage;
-  band: Band | null;
-  route_reasons: string[];
-  rescued: boolean;
   assigned_role: Role | null;
   role_source: "tagged" | "inferred" | null;
   role_reasoning: string | null;
   role_mismatch: boolean;
   pattern_score: number | null;
-  role_fit_score: number | null;
+  score_pm: number | null;
+  score_spm: number | null;
   total_score: number | null;
-  total_other_role: number | null;
+  strong_pattern: boolean;
   dimension_scores: Record<DimensionKey, DimensionScore> | null;
   brief: Brief | null;
   personal_line: string | null;
@@ -49,17 +41,21 @@ export interface Candidate {
   model: string | null;
   scored_at: string | null;
   scoring_error: string | null;
-  decided_by: "auto" | "arjun" | null;
-  decided_at: string | null;
-  email_scheduled_for: string | null;
+  interview_brief: string | null;
+  draft_kind: DraftKind | null;
+  draft_subject: string | null;
+  draft_body: string | null;
+  draft_source: "ai" | "template" | "edited" | null;
+  draft_error: string | null;
+  drafted_at: string | null;
+  sent_at: string | null;
 }
 
 export interface EmailRow {
   id: string;
   created_at: string;
   candidate_id: string;
-  kind: "rejection" | "shortlist";
-  trigger: "auto" | "arjun";
+  kind: DraftKind;
   intended_to: string;
   delivered_to: string | null;
   test_mode: boolean;
@@ -68,10 +64,8 @@ export interface EmailRow {
   subject: string;
   body_text: string;
   body_html: string;
-  status: "queued" | "scheduled" | "sent" | "simulated" | "cancelled" | "failed";
-  scheduled_for: string | null;
+  status: "queued" | "sent" | "failed";
   sent_at: string | null;
-  cancelled_at: string | null;
   resend_id: string | null;
   error: string | null;
 }
@@ -82,4 +76,15 @@ export interface CandidateEvent {
   candidate_id: string;
   action: string;
   detail: string | null;
+}
+
+export interface RubricCriterionRow {
+  id: number;
+  role: Role;
+  code: string;
+  dimension_key: string;
+  name: string;
+  description: string;
+  weight_pct: number;
+  sort_order: number;
 }

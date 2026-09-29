@@ -1,51 +1,58 @@
 import Link from "next/link";
-import { CandidateActions } from "@/components/CandidateActions";
-import { Card, EmptyState, PageHeader, RoleChip, SectionTitle, StageBadge, TotalScore, displayName, formatDateTime } from "@/components/ui";
+import { CandidateCard } from "@/components/CandidateCard";
+import { DraftRefresher, ScoreButton } from "@/components/PipelineButtons";
+import { Card, EmptyState, PageHeader, cx, displayName } from "@/components/ui";
+import { ROLE_TITLES, type Role } from "@/config/scoring";
 import { isCalendarPlaceholder } from "@/lib/emails/templates";
 import { configWarnings, env } from "@/lib/env";
+import { currentRanking, staleDrafts } from "@/lib/pipeline";
+import { desiredDraftKind } from "@/lib/ranking";
 import { getSettings } from "@/lib/settings";
-import { db } from "@/lib/supabase/server";
-import type { Candidate, Stage } from "@/lib/types";
 
 export const metadata = { title: "Dashboard · Kargo Hiring" };
 
-export default async function DashboardPage() {
-  const [{ data }, settings] = await Promise.all([
-    db()
-      .from("candidates")
-      .select("id, created_at, file_name, full_name, email, stage, band, total_score, assigned_role, role_source, email_scheduled_for, scoring_error")
-      .order("created_at", { ascending: false }),
-    getSettings(),
-  ]);
-  const candidates = (data ?? []) as Candidate[];
+const STATUS = [
+  { value: "to_send", label: "To send" },
+  { value: "sent", label: "Sent" },
+  { value: "all", label: "All" },
+] as const;
 
-  const count = (...stages: Stage[]) => candidates.filter((c) => stages.includes(c.stage)).length;
-  const pending = candidates
-    .filter((c) => c.stage === "reject_pending" || c.stage === "shortlist_pending")
-    .sort((a, b) => (a.email_scheduled_for ?? "").localeCompare(b.email_scheduled_for ?? ""));
-  const recent = candidates.slice(0, 6);
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ role?: string; status?: string }> }) {
+  const params = await searchParams;
+  const role: Role = params.role === "SPM" ? "SPM" : "PM";
+  const status = STATUS.find((s) => s.value === params.status)?.value ?? "to_send";
+
+  const [{ ranking, candidates }, settings] = await Promise.all([currentRanking(), getSettings()]);
+  const stale = staleDrafts(candidates, ranking).length;
+  const unscored = candidates.filter((c) => c.stage === "processing");
+  const scored = candidates.filter((c) => c.stage !== "processing");
+  const inRole = (r: Role) => scored.filter((c) => c.assigned_role === r);
+
+  const list = inRole(role)
+    .filter((c) => (status === "all" ? true : status === "sent" ? c.stage === "sent" : c.stage === "scored"))
+    .sort((a, b) => (ranking.rank.get(a.id) ?? 999) - (ranking.rank.get(b.id) ?? 999));
 
   const warnings = configWarnings();
   if (isCalendarPlaceholder(settings.calendarLink))
     warnings.push(
       env.testMode()
-        ? "The calendar link is still the {calendar_link} placeholder. Set it in Settings before turning test mode off."
-        : "The calendar link isn't set, so shortlisted candidates are held in review until you set it in Settings.",
+        ? "The interview calendar link is still the {calendar_link} placeholder. Set it in Settings before going live."
+        : "Set the interview calendar link in Settings. Invites can't be sent until you do.",
     );
 
-  const tiles = [
-    { label: "Waiting for you", value: count("review"), href: "/review", accent: "text-amber-700" },
-    { label: "Emails on hold", value: pending.length, href: "#held", accent: "text-slate-900" },
-    { label: "Shortlisted", value: count("shortlisted", "shortlist_pending"), href: "/candidates?stage=shortlisted", accent: "text-emerald-700" },
-    { label: "Rejected", value: count("rejected", "reject_pending"), href: "/candidates?stage=rejected", accent: "text-rose-700" },
-    { label: "Total CVs", value: candidates.length, href: "/candidates", accent: "text-slate-900" },
+  const href = (r: Role, s: string) => `/?role=${r}${s === "to_send" ? "" : `&status=${s}`}`;
+  const stats = [
+    { label: "CVs uploaded", value: candidates.length },
+    { label: "Invites to send", value: scored.filter((c) => c.stage === "scored" && c.draft_kind === "invite").length },
+    { label: "Rejections to send", value: scored.filter((c) => c.stage === "scored" && c.draft_kind === "rejection").length },
+    { label: "Sent", value: scored.filter((c) => c.stage === "sent").length },
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
-        title="Dashboard"
-        subtitle="Where every candidate stands right now."
+        title="Candidates"
+        subtitle={`Ranked by score within each role. The top ${settings.topN} per role get an interview brief and an invite draft; everyone else gets a rejection draft. Nothing is sent until you click Confirm.`}
         actions={
           <Link href="/upload" className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
             Upload CVs
@@ -61,67 +68,96 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        {tiles.map((t) => (
-          <Link key={t.label} href={t.href} className="rounded-2xl border border-slate-200 bg-white p-4 hover:border-slate-300">
-            <div className={`text-3xl font-semibold tabular-nums ${t.accent}`}>{t.value}</div>
-            <div className="mt-1 text-xs font-medium text-slate-500">{t.label}</div>
-          </Link>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {stats.map((s) => (
+          <div key={s.label} className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-3xl font-semibold tabular-nums text-slate-900">{s.value}</div>
+            <div className="mt-1 text-xs font-medium text-slate-500">{s.label}</div>
+          </div>
         ))}
       </div>
 
-      <Card>
-        <SectionTitle hint={`Held for ${settings.holdHours}h before sending. Undo moves them to review.`}>
-          <span id="held">Emails on hold</span>
-        </SectionTitle>
-        {pending.length === 0 ? (
-          <p className="text-sm text-slate-500">No automatic emails waiting to go out.</p>
-        ) : (
+      {stale > 0 && (
+        <Card className="flex flex-wrap items-center justify-between gap-3 border-teal-200 bg-teal-50/50">
+          <p className="text-sm text-slate-800">
+            {stale} candidate{stale === 1 ? "" : "s"} need{stale === 1 ? "s" : ""} a new brief or email draft (new uploads or a change in the top {settings.topN}).
+          </p>
+          <DraftRefresher stale={stale} />
+        </Card>
+      )}
+
+      {unscored.length > 0 && (
+        <Card>
+          <h2 className="mb-2 text-sm font-semibold text-slate-900">Not scored yet ({unscored.length})</h2>
           <ul className="divide-y divide-slate-100">
-            {pending.map((c) => (
-              <li key={c.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+            {unscored.map((c) => (
+              <li key={c.id} className="flex flex-wrap items-center justify-between gap-3 py-2">
                 <div className="min-w-0">
                   <Link href={`/candidates/${c.id}`} className="font-medium text-slate-900 hover:underline">
                     {displayName(c)}
                   </Link>
-                  <div className="mt-1 flex flex-wrap items-center gap-2">
-                    <StageBadge stage={c.stage} />
-                    <RoleChip role={c.assigned_role} />
-                    <span className="text-xs tabular-nums text-slate-500">Score {c.total_score}</span>
-                  </div>
+                  {c.scoring_error && <p className="text-xs text-rose-700">Scoring failed: {c.scoring_error}</p>}
                 </div>
-                <CandidateActions id={c.id} stage={c.stage} scheduledFor={c.email_scheduled_for} hasEmail={!!c.email} scoringError={c.scoring_error} size="sm" />
+                <ScoreButton id={c.id} label={c.scoring_error ? "Retry scoring" : "Score now"} />
               </li>
             ))}
           </ul>
-        )}
-      </Card>
+        </Card>
+      )}
 
-      <Card>
-        <SectionTitle hint={<Link href="/candidates" className="hover:underline">See all</Link>}>Recent uploads</SectionTitle>
-        {recent.length === 0 ? (
-          <EmptyState>
-            No CVs yet. <Link href="/upload" className="font-medium text-teal-700 hover:underline">Upload the first batch</Link>.
-          </EmptyState>
-        ) : (
-          <ul className="divide-y divide-slate-100">
-            {recent.map((c) => (
-              <li key={c.id}>
-                <Link href={`/candidates/${c.id}`} className="flex items-center justify-between gap-3 py-3 hover:bg-slate-50">
-                  <div className="min-w-0">
-                    <div className="truncate font-medium text-slate-900">{displayName(c)}</div>
-                    <div className="text-xs text-slate-500">{formatDateTime(c.created_at)}</div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    <StageBadge stage={c.stage} />
-                    <TotalScore total={c.total_score} band={c.band} />
-                  </div>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+          {(["PM", "SPM"] as Role[]).map((r) => (
+            <Link
+              key={r}
+              href={href(r, status)}
+              className={cx("rounded-lg px-4 py-1.5 text-sm font-medium", r === role ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900")}
+            >
+              {ROLE_TITLES[r]} <span className="tabular-nums text-slate-400">{inRole(r).length}</span>
+            </Link>
+          ))}
+        </div>
+        <div className="flex gap-1">
+          {STATUS.map((s) => (
+            <Link
+              key={s.value}
+              href={href(role, s.value)}
+              className={cx(
+                "rounded-full px-3 py-1 text-sm",
+                s.value === status ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50",
+              )}
+            >
+              {s.label}
+            </Link>
+          ))}
+        </div>
+      </div>
+
+      {list.length === 0 ? (
+        <EmptyState>
+          {scored.length === 0 ? (
+            <>
+              No CVs scored yet. <Link href="/upload" className="font-medium text-teal-700 hover:underline">Upload the first batch</Link>.
+            </>
+          ) : (
+            "No candidates here."
+          )}
+        </EmptyState>
+      ) : (
+        <div className="space-y-4">
+          {list.map((c) => (
+            <CandidateCard
+              key={c.id}
+              c={c}
+              role={role}
+              rank={ranking.rank.get(c.id) ?? null}
+              isTop={ranking.top.has(c.id)}
+              desiredKind={desiredDraftKind(c.id, ranking)}
+              calendarLink={settings.calendarLink}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

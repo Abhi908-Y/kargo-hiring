@@ -18,11 +18,6 @@ interface Item {
 }
 
 const MAX_BYTES = 4 * 1024 * 1024;
-const STAGE_TEXT: Record<string, string> = {
-  review: "Sent to your review queue",
-  reject_pending: "Auto-reject: email held, Undo available",
-  shortlist_pending: "Auto-shortlist: email held, Undo available",
-};
 
 function validate(file: File): string | null {
   if (!/\.(pdf|docx)$/i.test(file.name)) return "Only .pdf and .docx files are supported.";
@@ -55,6 +50,7 @@ export function UploadClient() {
   const [defaultRole, setDefaultRole] = useState<RoleChoice>("PM");
   const [dragging, setDragging] = useState(false);
   const [running, setRunning] = useState(false);
+  const [drafting, setDrafting] = useState<{ done: number; total: number; error?: string; finished?: boolean } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const update = (key: string, patch: Partial<Item>) =>
@@ -122,11 +118,11 @@ export function UploadClient() {
         return;
       }
       update(item.key, {
-        status: "done",
+        status: body.scoringError ? "error" : "done",
         progress: 100,
         message: body.scoringError
-          ? `Scoring failed (${body.scoringError}), so it went to review.`
-          : STAGE_TEXT[body.stage] ?? body.stage,
+          ? `Scoring failed (${body.scoringError}). The CV is saved; retry from the dashboard.`
+          : `Scored: PM ${body.scorePm}/100 · SPM ${body.scoreSpm}/100 (ranked as ${body.role})`,
         result: { id, stage: body.stage, total: body.total, role: body.role, scoringError: body.scoringError },
       });
     } catch {
@@ -148,6 +144,22 @@ export function UploadClient() {
     for (const item of queue) {
       await processOne(item);
     }
+    // Then steps 2 + 3: interview briefs for the top candidates and a draft email for everyone.
+    setDrafting({ done: 0, total: 0 });
+    let done = 0;
+    for (let guard = 0; guard < 500; guard++) {
+      const res = await fetch("/api/drafts/refresh", { method: "POST" }).catch(() => null);
+      const data = res?.ok ? await res.json().catch(() => null) : null;
+      if (!data) {
+        setDrafting({ done, total: done, error: "Couldn't write all drafts. Use \"Write drafts now\" on the dashboard." });
+        break;
+      }
+      if (!data.drafted) break;
+      done++;
+      setDrafting({ done, total: done + data.remaining });
+      if (data.remaining === 0) break;
+    }
+    setDrafting((d) => (d?.error ? d : { done, total: done, finished: true }));
     setRunning(false);
   }
 
@@ -302,9 +314,26 @@ export function UploadClient() {
           </ul>
         </div>
       )}
+      {drafting && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="mb-1 flex justify-between text-xs text-slate-600">
+            <span>Writing interview briefs and email drafts</span>
+            <span className="tabular-nums">
+              {drafting.done} of {drafting.total || "…"}
+            </span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className="h-full rounded-full bg-teal-600 transition-all"
+              style={{ width: `${drafting.finished ? 100 : drafting.total ? (drafting.done / drafting.total) * 100 : 5}%` }}
+            />
+          </div>
+          {drafting.error && <p className="mt-2 text-xs text-rose-700">{drafting.error}</p>}
+        </div>
+      )}
       {active > 0 && finished === items.length && !running && (
         <p className="text-sm text-slate-600">
-          All done. <Link href="/review" className="font-medium text-teal-700 hover:underline">Go to the review queue</Link>.
+          All done. <Link href="/" className="font-medium text-teal-700 hover:underline">Open the dashboard</Link> to read the drafts and send.
         </p>
       )}
     </div>

@@ -1,15 +1,14 @@
 import "server-only";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { DEMO_USER, isDemoMode } from "@/lib/demo/mode";
 import { isAdminEmail } from "@/lib/env";
-import { createSessionClient } from "@/lib/supabase/server";
+import { SESSION_COOKIE, verifySessionToken } from "@/lib/session";
 
 async function currentAdminEmail(): Promise<string | null> {
   if (isDemoMode()) return DEMO_USER; // local-only, see lib/demo/mode.ts
-  const supabase = await createSessionClient();
-  const { data } = await supabase.auth.getUser();
-  const email = data.user?.email ?? null;
+  const email = verifySessionToken((await cookies()).get(SESSION_COOKIE)?.value);
   return isAdminEmail(email) ? email : null;
 }
 

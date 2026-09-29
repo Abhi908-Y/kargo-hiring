@@ -7,15 +7,13 @@ import { cx } from "./ui";
 const LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/upload", label: "Upload" },
-  { href: "/review", label: "Review" },
-  { href: "/candidates", label: "Candidates" },
-  { href: "/emails", label: "Emails" },
+  { href: "/emails", label: "Sent emails" },
   { href: "/settings", label: "Settings" },
 ];
 
-export function Nav({ reviewCount }: { reviewCount: number }) {
+export function Nav({ toSend }: { toSend: number }) {
   const pathname = usePathname();
-  const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
+  const isActive = (href: string) => (href === "/" ? pathname === "/" || pathname.startsWith("/candidates") : pathname.startsWith(href));
 
   return (
     <nav className="-mx-4 flex gap-1 overflow-x-auto px-4 pb-px sm:mx-0 sm:px-0" aria-label="Main">
@@ -29,8 +27,10 @@ export function Nav({ reviewCount }: { reviewCount: number }) {
           )}
         >
           {l.label}
-          {l.href === "/review" && reviewCount > 0 && (
-            <span className="rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold leading-4 text-white">{reviewCount}</span>
+          {l.href === "/" && toSend > 0 && (
+            <span className="rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold leading-4 text-white" title="Drafts waiting to be sent">
+              {toSend}
+            </span>
           )}
         </Link>
       ))}
