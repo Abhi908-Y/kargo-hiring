@@ -2,6 +2,8 @@
 
 A hiring app for Arjun (founder, Kargo). Upload CVs for the PM and Senior PM roles. Each one gets scored against [`rubric/arjun_rubric.md`](rubric/arjun_rubric.md). Clear rejects and clear shortlists get an email automatically, with a 4-hour Undo window. Everything else goes to Arjun's review queue.
 
+**Live:** https://kargo-hiring-murex.vercel.app (every push to `main` deploys automatically)
+
 **Stack:** Next.js 16 (TypeScript) on Vercel · Supabase (Postgres, private CV storage, login) · Resend (email) · Anthropic API, `claude-sonnet-5` (scoring).
 
 ## How it works
