@@ -32,7 +32,7 @@ Email rules:
 - Mention one or two specific, true things from the CV. Never invent facts, numbers or companies.
 - End with this sign-off on two lines: "Arjun Mehta" then "Founder, Kargo".
 - Do not mention scores, rubrics, rankings, AI or other candidates.
-- Invite: say they are shortlisted for an interview with Arjun, the founder, for the named role, and include this exact line: "Please pick a slot that works for you: ${LINK_TOKEN}". Subject line names Kargo and the interview.
+- Invite: congratulate them, say they are shortlisted for the named role and that you (Arjun, as Kargo's founder) would like to interview them yourself. Never refer to Arjun in the third person. Include this exact line: "Please pick a slot that works for you: ${LINK_TOKEN}". Subject line names Kargo and the interview.
 - Rejection: thank them sincerely, acknowledge something genuine from their work, include this exact sentence: "${REJECTION_SENTENCE}" Give no reasons, no criticism and no advice. Wish them well. Subject line is short and kind.
 
 Interview brief (invites only; empty string for rejections): exactly three sentences for Arjun, not the candidate: (1) who they are and their strongest evidence, (2) the biggest gap or risk to test, (3) what to ask first. Use only CV evidence.
