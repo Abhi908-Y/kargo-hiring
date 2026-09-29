@@ -21,7 +21,10 @@ export async function proxy(request: NextRequest) {
 
   if (!url || !key) {
     if (isPublic) return response;
-    return new NextResponse("Supabase is not configured. Fill in .env.local (see .env.example).", { status: 500 });
+    return new NextResponse(
+      "Supabase is not configured yet. Add the keys listed in .env.example: on Vercel under Project → Settings → Environment Variables (then redeploy), or locally in .env.local.",
+      { status: 500 },
+    );
   }
 
   const supabase = createServerClient(url, key, {
