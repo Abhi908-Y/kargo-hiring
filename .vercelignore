@@ -1,0 +1,8 @@
+.env*
+!.env.example
+.demo-data
+calibration
+past-hires
+.claude
+.next
+node_modules
