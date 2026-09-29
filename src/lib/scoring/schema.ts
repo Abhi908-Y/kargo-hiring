@@ -4,7 +4,7 @@ import { z } from "zod";
 // the server computes those (rubric hard rule 6).
 
 const Dimension = z.object({
-  score: z.number().int(),
+  score: z.number(), // the server rounds and clamps to each dimension's max (lib/routing.ts)
   status: z.enum(["evidenced", "not_evidenced"]),
   evidence: z.string(),
 });

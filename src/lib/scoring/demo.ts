@@ -1,7 +1,7 @@
-// Demo-mode stand-in for the Claude scorer: a keyword heuristic that returns the
+// Demo-mode stand-in for the Gemini scorer: a keyword heuristic that returns the
 // same JSON shape so every page and rule can be tried before an API key exists.
 // It is NOT the real scorer and its numbers mean little. Used only when
-// DEMO_MODE=true and ANTHROPIC_API_KEY is not set.
+// DEMO_MODE=true and GEMINI_API_KEY is not set.
 
 import type { Role } from "@/config/scoring";
 import type { ScoringOutput } from "./schema";

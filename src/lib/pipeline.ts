@@ -121,7 +121,7 @@ export async function scoreAndRoute(id: string): Promise<Result<{ candidate: Can
 
   let scored;
   try {
-    const scorer = isDemoMode() && !process.env.ANTHROPIC_API_KEY ? demoScoreCv : scoreCv;
+    const scorer = isDemoMode() && !process.env.GEMINI_API_KEY ? demoScoreCv : scoreCv;
     scored = await scorer({ candidateId: c.id, taggedRole: c.tagged_role, redactedText: c.redacted_text });
   } catch (e) {
     const message = (e as Error).message;

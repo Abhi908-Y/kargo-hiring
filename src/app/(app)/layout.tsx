@@ -16,7 +16,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
       {isDemoMode() && (
         <div className="bg-violet-100 px-4 py-1.5 text-center text-xs font-medium text-violet-900">
           Demo mode: local data, no login, emails recorded but never sent
-          {process.env.ANTHROPIC_API_KEY ? "." : ", keyword scorer instead of AI."}
+          {process.env.GEMINI_API_KEY ? "." : ", keyword scorer instead of AI."}
         </div>
       )}
       {testMode && !isDemoMode() && (

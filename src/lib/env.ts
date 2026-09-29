@@ -34,11 +34,11 @@ export function configWarnings(): string[] {
   const w: string[] = [];
   if (isDemoMode()) {
     w.push("Demo mode: data is saved on this computer (.demo-data/), there is no login, and emails are only recorded, never sent.");
-    if (!process.env.ANTHROPIC_API_KEY)
-      w.push("No ANTHROPIC_API_KEY yet, so CVs are scored by a simple keyword heuristic, NOT the rubric AI. Treat the numbers as placeholders.");
+    if (!process.env.GEMINI_API_KEY)
+      w.push("No GEMINI_API_KEY yet, so CVs are scored by a simple keyword heuristic, NOT the rubric AI. Treat the numbers as placeholders.");
     return w;
   }
-  if (!process.env.ANTHROPIC_API_KEY) w.push("ANTHROPIC_API_KEY is not set, so CVs can't be scored.");
+  if (!process.env.GEMINI_API_KEY) w.push("GEMINI_API_KEY is not set, so CVs can't be scored.");
   if (!env.resendApiKey()) w.push("RESEND_API_KEY is not set. Emails are simulated (logged here, not delivered).");
   if (env.testMode() && !env.testModeEmail()) w.push("TEST_MODE is on but TEST_MODE_EMAIL is empty, so emails will fail.");
   if (!env.testMode() && !process.env.EMAIL_FROM_ADDRESS) w.push("TEST_MODE is off but EMAIL_FROM_ADDRESS is not set to your verified domain.");

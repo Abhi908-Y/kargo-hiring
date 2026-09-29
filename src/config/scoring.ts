@@ -20,7 +20,8 @@ export type Settings = typeof DEFAULT_SETTINGS;
 /** Tagged CV: flag a mismatch when the other role's B1 is at least this much higher. */
 export const ROLE_MISMATCH_GAP = 8;
 
-export const MODEL = "claude-sonnet-5";
+/** Default Gemini model; override with the GEMINI_MODEL env var (e.g. gemini-3.1-pro-preview). */
+export const GEMINI_MODEL = "gemini-3.8-flash";
 
 export type Role = "PM" | "SPM";
 

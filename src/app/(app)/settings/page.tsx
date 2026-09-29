@@ -1,5 +1,6 @@
 import { Card, PageHeader, SectionTitle } from "@/components/ui";
-import { DEFAULT_SETTINGS, MODEL } from "@/config/scoring";
+import { DEFAULT_SETTINGS } from "@/config/scoring";
+import { geminiModel } from "@/lib/scoring/score";
 import { env } from "@/lib/env";
 import { getSettings } from "@/lib/settings";
 import { isDemoMode } from "@/lib/demo/mode";
@@ -17,7 +18,7 @@ export default async function SettingsPage() {
     ["Sender", `${env.emailFromName()} <${env.emailFrom()}>`],
     ["Replies go to", env.emailReplyTo() ?? "Sender address"],
     ["Email delivery", env.resendApiKey() ? "Resend" : "Simulated (RESEND_API_KEY not set)"],
-    ["Scoring model", demo && !process.env.ANTHROPIC_API_KEY ? "Demo keyword heuristic (no ANTHROPIC_API_KEY)" : MODEL],
+    ["Scoring model", demo && !process.env.GEMINI_API_KEY ? "Demo keyword heuristic (no GEMINI_API_KEY)" : `Google Gemini · ${geminiModel()}`],
   ];
 
   return (

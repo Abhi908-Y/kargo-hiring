@@ -34,8 +34,8 @@ if (!folder || !fs.existsSync(folder)) {
   console.error("Usage: npm run calibrate -- <folder-with-cvs> [--role PM|SPM|untagged] [--dry]");
   process.exit(2);
 }
-if (!dry && !process.env.ANTHROPIC_API_KEY) {
-  console.error("ANTHROPIC_API_KEY is not set (add it to .env.local), or pass --dry.");
+if (!dry && !process.env.GEMINI_API_KEY) {
+  console.error("GEMINI_API_KEY is not set (add it to .env.local), or pass --dry.");
   process.exit(2);
 }
 

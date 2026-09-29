@@ -4,13 +4,13 @@ A hiring app for Arjun (founder, Kargo). Upload CVs for the PM and Senior PM rol
 
 **Live:** https://kargo-hiring-murex.vercel.app (every push to `main` deploys automatically)
 
-**Stack:** Next.js 16 (TypeScript) on Vercel · Supabase (Postgres, private CV storage, login) · Resend (email) · Anthropic API, `claude-sonnet-5` (scoring).
+**Stack:** Next.js 16 (TypeScript) on Vercel · Supabase (Postgres, private CV storage, login) · Resend (email) · Google Gemini API, `gemini-3.8-flash` by default (scoring).
 
 ## How it works
 
 1. **Upload** (`/upload`): drag and drop, or pick, `.pdf` and `.docx` files. Each file gets a role: PM, Senior PM, or Untagged. Files are sent one per request, with a progress bar.
 2. **Extract and clean up** (`src/lib/extract.ts`, `src/lib/redact.ts`): the app reads the text and skips duplicates (same file, same text, or same email). Before anything goes to the AI, it removes the **name, email, phone and links**, plus date of birth, gender, marital status and street address lines. Contact details are stored separately and are used only for emails. The candidate page shows exactly what the AI saw.
-3. **Score** (`src/lib/scoring/`): Claude scores the 8 rubric dimensions. Every score comes with a quoted line from the CV as evidence. For untagged CVs, the AI suggests PM or SPM.
+3. **Score** (`src/lib/scoring/`): Gemini scores the 8 rubric dimensions. Every score comes with a quoted line from the CV as evidence. For untagged CVs, the AI suggests PM or SPM.
 4. **Route** (`src/lib/routing.ts`): the **server, not the AI**, adds up the totals, assigns the role using the rubric's rules, and picks the route:
 
    | Condition | Result |
@@ -48,7 +48,7 @@ Open http://localhost:3000 and upload the fictional CVs in [`samples/`](samples/
 - Data is saved in `.demo-data/` on this computer. There's a **Reset demo data** button in Settings.
 - There's no login.
 - Emails are recorded on the Emails page but never sent.
-- CVs are scored by a **keyword heuristic, not the AI**. It exists so you can try every page, button and routing rule. Its numbers mean nothing. Add `ANTHROPIC_API_KEY` to `.env.local` and demo mode uses real Claude scoring instead.
+- CVs are scored by a **keyword heuristic, not the AI**. It exists so you can try every page, button and routing rule. Its numbers mean nothing. Add `GEMINI_API_KEY` to `.env.local` and demo mode uses real Gemini scoring instead.
 
 Demo mode is switched off automatically on Vercel, because it has no login. To use the real setup, remove `DEMO_MODE=true` and fill in the keys below.
 
@@ -91,7 +91,7 @@ On [vercel.com](https://vercel.com): **Add New → Project → import the repo**
 The rubric says to run the eight retained hires as **PM**. None of them should be auto-rejected.
 
 ```bash
-npm run calibrate -- ./past-hires            # needs ANTHROPIC_API_KEY in .env.local
+npm run calibrate -- ./past-hires            # needs GEMINI_API_KEY in .env.local
 npm run calibrate -- ./past-hires --dry      # check extraction + removal of personal details only, no API calls
 ```
 
