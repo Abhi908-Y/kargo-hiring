@@ -4,10 +4,11 @@ import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { DEMO_USER, isDemoMode } from "@/lib/demo/mode";
 import { isAdminEmail } from "@/lib/env";
-import { SESSION_COOKIE, verifySessionToken } from "@/lib/session";
+import { loginRequired, SESSION_COOKIE, verifySessionToken } from "@/lib/session";
 
 async function currentAdminEmail(): Promise<string | null> {
   if (isDemoMode()) return DEMO_USER; // local-only, see lib/demo/mode.ts
+  if (!loginRequired()) return process.env.ADMIN_EMAIL?.trim() || "open access"; // login switched off
   const email = verifySessionToken((await cookies()).get(SESSION_COOKIE)?.value);
   return isAdminEmail(email) ? email : null;
 }

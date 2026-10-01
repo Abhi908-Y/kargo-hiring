@@ -73,7 +73,7 @@ It writes `calibration/report.md` and the exact text the AI saw to `calibration/
 
 - **Gemini free tier vs paid:** on the free tier of Google AI Studio / the Gemini API, Google may use the content you send to improve its products, and humans may review it. With billing enabled (paid tier), Google says prompts and responses are not used to improve its products. Use a billed key for real candidate data.
 - **Why the extraction step matters for DPDP (India's Digital Personal Data Protection Act, 2023):** personal identifiers are separated **before** any AI call, so the AI processor never receives them. That is data minimisation and purpose limitation. The identifiers live only in our database, which only Arjun can access, and are used only to address the email. A real deployment would also need a lawful basis or consent notice, a retention and deletion policy, and a way for candidates to ask for their data to be erased.
-- Every table is reached only through server routes that check Arjun's signed login cookie. CV files are served only to him. The scoring and drafting prompts treat CV text as data, so instructions hidden in a CV are ignored.
+- The login page is **off** (`REQUIRE_LOGIN` not set): anyone with the link can see candidates and send emails. Set `REQUIRE_LOGIN=true` (plus `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `SESSION_SECRET`) on Vercel and redeploy to turn it back on. Search engines are told not to index the site. The scoring and drafting prompts treat CV text as data, so instructions hidden in a CV are ignored.
 
 ## Scripts
 

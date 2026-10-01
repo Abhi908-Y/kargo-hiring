@@ -5,6 +5,14 @@ import crypto from "node:crypto";
 // Used by both the proxy and server code, so no "server-only" import here.
 
 export const SESSION_COOKIE = "kargo_session";
+
+/**
+ * The login page is OFF unless REQUIRE_LOGIN=true. With it off, anyone who has
+ * the site's link can see candidates' personal details and send emails.
+ */
+export function loginRequired(): boolean {
+  return process.env.REQUIRE_LOGIN?.trim().toLowerCase() === "true";
+}
 export const SESSION_DAYS = 7;
 
 function secret(): string | null {

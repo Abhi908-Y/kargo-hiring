@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { isDemoMode } from "@/lib/demo/mode";
 import { env } from "@/lib/env";
 import { finalizeDue } from "@/lib/pipeline";
+import { loginRequired } from "@/lib/session";
 
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   const email = await requireAdmin();
@@ -31,8 +32,8 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
               <span className="text-sm font-bold uppercase tracking-widest text-teal-700">Kargo</span>
               <span className="text-sm text-slate-500">Hiring</span>
             </div>
-            {demo ? (
-              <span className="text-xs text-slate-500">Demo</span>
+            {demo || !loginRequired() ? (
+              <span className="text-xs text-slate-500">{demo ? "Demo" : "No login"}</span>
             ) : (
               <form action="/auth/signout" method="post" className="flex items-center gap-3">
                 <span className="hidden text-xs text-slate-500 sm:inline">{email}</span>
