@@ -83,3 +83,20 @@ ${REJECTION_SENTENCE}`, interview_brief: "" };
     expect(draftProblems({ ...ok, body: "Hi [NAME], see you" }, "invite")).toContain("invite has no calendar link");
   });
 });
+
+describe("name detection edge cases", () => {
+  it("never takes a school or company line as the name", () => {
+    const c = extractContact("VELAMMAL MATRICULATION SCHOOL\nEducation\nB.E. 2019", "cv.pdf");
+    expect(c.fullName).toBeNull();
+  });
+
+  it("prefers the file name when the header has no matching name", () => {
+    const c = extractContact("Some Random Heading\nEDUCATION\nR.M.K College of Engineering", "16_shiva_kumar.pdf");
+    expect(c.fullName).toBe("Shiva Kumar");
+  });
+
+  it("still uses a header name that matches the file name", () => {
+    const c = extractContact("Priya Sharma\nProduct Manager", "priya_sharma_cv.pdf");
+    expect(c.fullName).toBe("Priya Sharma");
+  });
+});

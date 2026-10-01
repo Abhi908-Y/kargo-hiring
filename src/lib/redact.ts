@@ -29,6 +29,13 @@ const HEADER_STOPWORDS = new Set(
     "founder", "analyst", "consultant", "operations", "sales", "marketing", "mumbai", "india",
     "bangalore", "bengaluru", "delhi", "pune", "hyderabad", "chennai", "email", "phone", "mobile",
     "linkedin", "portfolio", "references",
+    // institutions and companies are never a person's name
+    "school", "matriculation", "matric", "college", "university", "institute", "institution", "academy",
+    "vidyalaya", "vidyalayam", "polytechnic", "public", "higher", "secondary", "convent", "campus",
+    "technologies", "technology", "solutions", "services", "systems", "software", "labs", "pvt", "ltd",
+    "limited", "inc", "llp", "corp", "corporation", "company", "group", "bank", "consulting", "global",
+    "international", "foundation", "trust", "hospital", "board", "department", "engineering", "management",
+    "business", "studies", "science", "sciences", "arts", "commerce", "for", "in", "at",
   ],
 );
 const FILENAME_JUNK = new Set([
@@ -105,6 +112,10 @@ export function detectName(text: string, fileName: string): string | null {
     l.split(/\s+/).some((w) => fileTokens.includes(w.toLowerCase())),
   );
   if (matchingFile) return toTitleCase(matchingFile);
+  // No header line matches the file name: a name in the file name (e.g. "16_shiva_kumar.pdf")
+  // is more reliable than guessing from whatever line happens to be at the top.
+  const fileName2 = tokensFromFileName(fileName);
+  if (fileName2.length >= 2 && fileName2.length <= 3) return toTitleCase(fileName2.join(" "));
   if (candidates.length) return toTitleCase(candidates[0]);
 
   // Single-word header line that matches the file name, e.g. "PRIYA" + "Priya_Sharma_CV.pdf".
