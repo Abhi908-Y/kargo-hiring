@@ -1,7 +1,6 @@
 import { CandidateCard } from "@/components/CandidateCard";
 import { BulkSendButton } from "@/components/SendButton";
 import { Card, EmptyState, PageHeader } from "@/components/ui";
-import { isCalendarPlaceholder } from "@/lib/emails/templates";
 import { env } from "@/lib/env";
 import { allCandidates, rankCandidates } from "@/lib/pipeline";
 import { getRubric } from "@/lib/rubric";
@@ -33,12 +32,6 @@ export async function ColumnPage({ column }: { column: "auto_selected" | "auto_r
             Send everyone in this column their {selected ? "interview invite" : "rejection"} in one go, or send one at a time from the cards. If you
             disagree with where someone landed, use <b>Move to review</b> on their card first.
           </p>
-          {selected && isCalendarPlaceholder(settings.calendarLink) && (
-            <p className="mt-2 text-amber-800">
-              The interview calendar link isn&apos;t set, so invites will say {"{calendar_link}"}. Set it in Settings first
-              {env.testMode() ? "" : " (required when test mode is off)"}.
-            </p>
-          )}
           {env.testMode() && <p className="mt-2 text-xs text-slate-500">Test mode is on: every email goes to {env.testModeEmail()}.</p>}
           {noEmail > 0 && <p className="mt-2 text-xs text-rose-700">{noEmail} candidate(s) have no email address and will be skipped.</p>}
         </div>

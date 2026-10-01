@@ -3,8 +3,7 @@ import { CandidateCard } from "@/components/CandidateCard";
 import { DraftRefresher, ScoreButton } from "@/components/PipelineButtons";
 import { Card, EmptyState, PageHeader, cx, displayName } from "@/components/ui";
 import { ROLE_TITLES, type Role } from "@/config/scoring";
-import { isCalendarPlaceholder } from "@/lib/emails/templates";
-import { configWarnings, env } from "@/lib/env";
+import { configWarnings } from "@/lib/env";
 import { allCandidates, missingDrafts, rankCandidates } from "@/lib/pipeline";
 import { getRubric } from "@/lib/rubric";
 import { getSettings } from "@/lib/settings";
@@ -37,12 +36,6 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     .sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
 
   const warnings = configWarnings();
-  if (isCalendarPlaceholder(settings.calendarLink))
-    warnings.push(
-      env.testMode()
-        ? "The interview calendar link is still the {calendar_link} placeholder. Set it in Settings before going live."
-        : "Set the interview calendar link in Settings. Until you do, high scorers go to Review instead of Auto-selected.",
-    );
 
   const stats = [
     { label: "Auto-selected", value: scored.filter((c) => c.stage === "auto_selected").length, href: "/selected" },

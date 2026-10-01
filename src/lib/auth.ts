@@ -1,7 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { NextResponse } from "next/server";
+import { connection, NextResponse } from "next/server";
 import { DEMO_USER, isDemoMode } from "@/lib/demo/mode";
 import { isAdminEmail } from "@/lib/env";
 import { loginRequired, SESSION_COOKIE, verifySessionToken } from "@/lib/session";
@@ -15,6 +15,9 @@ async function currentAdminEmail(): Promise<string | null> {
 
 /** For pages and layouts: redirect to /login unless Arjun is signed in. */
 export async function requireAdmin(): Promise<string> {
+  // Always render at request time: the data changes with every upload and send,
+  // and with the login off nothing else marks these pages as dynamic.
+  await connection();
   const email = await currentAdminEmail();
   if (!email) redirect("/login");
   return email;
