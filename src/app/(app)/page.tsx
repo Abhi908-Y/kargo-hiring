@@ -5,6 +5,7 @@ import { Card, EmptyState, PageHeader, cx, displayName } from "@/components/ui";
 import { ROLE_TITLES, type Role } from "@/config/scoring";
 import { configWarnings } from "@/lib/env";
 import { allCandidates, missingDrafts, rankCandidates } from "@/lib/pipeline";
+import { latestNotes } from "@/lib/notes";
 import { getRubric } from "@/lib/rubric";
 import { getSettings } from "@/lib/settings";
 import type { Candidate } from "@/lib/types";
@@ -24,7 +25,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const role: Role = params.role === "SPM" ? "SPM" : "PM";
   const filter = FILTERS.find((f) => f.value === params.show) ?? FILTERS[0];
 
-  const [candidates, settings, rubric] = await Promise.all([allCandidates(), getSettings(), getRubric()]);
+  const [candidates, settings, rubric, notes] = await Promise.all([allCandidates(), getSettings(), getRubric(), latestNotes()]);
   const names = Object.fromEntries(rubric.filter((r) => r.role === role).map((r) => [r.dimension_key, r.name]));
   const rank = rankCandidates(candidates);
   const missing = candidates.reduce((n, c) => n + missingDrafts(c).length, 0);
@@ -149,7 +150,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       ) : (
         <div className="space-y-4">
           {list.map((c) => (
-            <CandidateCard key={c.id} c={c} role={role} rank={rank.get(c.id) ?? null} calendarLink={settings.calendarLink} names={names} />
+            <CandidateCard key={c.id}
+              note={notes.get(c.id)} c={c} role={role} rank={rank.get(c.id) ?? null} calendarLink={settings.calendarLink} names={names} />
           ))}
         </div>
       )}

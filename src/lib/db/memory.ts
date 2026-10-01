@@ -77,6 +77,8 @@ function withDefaults(table: string, row: Row, t: Tables): Row {
       };
     case "candidate_events":
       return { id: (t.candidate_events?.at(-1)?.id ?? 0) + 1, created_at: now(), detail: null, ...row };
+    case "candidate_notes":
+      return { id: (t.candidate_notes?.at(-1)?.id ?? 0) + 1, created_at: now(), ...row };
     case "settings":
       return {
         id: 1, auto_reject_below: DEFAULT_SETTINGS.autoRejectBelow, auto_invite_above: DEFAULT_SETTINGS.autoInviteAbove,

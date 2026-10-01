@@ -32,6 +32,7 @@ export function CandidateCard(props: {
   rank: number | null;
   calendarLink: string;
   names: Record<string, string>;
+  note?: { body: string; created_at: string; count: number };
 }) {
   const { c, role, rank } = props;
   const score = role === "PM" ? c.score_pm : c.score_spm;
@@ -90,6 +91,15 @@ export function CandidateCard(props: {
       )}
 
       {c.route_reason && <p className="mt-3 text-xs text-slate-500">{c.route_reason}</p>}
+
+      {props.note && (
+        <Link href={`/candidates/${c.id}`} className="mt-3 block rounded-xl border border-sky-100 bg-sky-50/60 p-3 text-sm hover:border-sky-200">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-sky-800">
+            Your note{props.note.count > 1 ? `s (${props.note.count}, latest shown)` : ""} · {formatDateTime(props.note.created_at)}
+          </div>
+          <p className="line-clamp-3 whitespace-pre-wrap text-slate-800">{props.note.body}</p>
+        </Link>
+      )}
 
       <div className="mt-4 space-y-2">
         {c.stage === "review" && (

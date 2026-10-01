@@ -1,13 +1,14 @@
 import { CandidateCard } from "@/components/CandidateCard";
 import { EmptyState, PageHeader } from "@/components/ui";
 import { allCandidates, rankCandidates } from "@/lib/pipeline";
+import { latestNotes } from "@/lib/notes";
 import { getRubric } from "@/lib/rubric";
 import { getSettings } from "@/lib/settings";
 
 export const metadata = { title: "Review · Kargo Hiring" };
 
 export default async function ReviewPage() {
-  const [candidates, settings, rubric] = await Promise.all([allCandidates(), getSettings(), getRubric()]);
+  const [candidates, settings, rubric, notes] = await Promise.all([allCandidates(), getSettings(), getRubric(), latestNotes()]);
   const rank = rankCandidates(candidates);
   const queue = candidates
     .filter((c) => c.stage === "review")
@@ -27,6 +28,7 @@ export default async function ReviewPage() {
           {queue.map((c) => (
             <CandidateCard
               key={c.id}
+              note={notes.get(c.id)}
               c={c}
               role={c.assigned_role ?? "PM"}
               rank={rank.get(c.id) ?? null}

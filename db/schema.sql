@@ -183,3 +183,14 @@ create table if not exists candidate_events (
   detail        text
 );
 create index if not exists candidate_events_candidate_idx on candidate_events (candidate_id, created_at);
+
+-- ---------------------------------------------------------------------------
+-- Arjun's notes on a candidate (private; never sent to the AI)
+-- ---------------------------------------------------------------------------
+create table if not exists candidate_notes (
+  id            bigint generated always as identity primary key,
+  created_at    timestamptz not null default now(),
+  candidate_id  uuid not null references candidates(id) on delete cascade,
+  body          text not null
+);
+create index if not exists candidate_notes_candidate_idx on candidate_notes (candidate_id, created_at desc);

@@ -6,7 +6,7 @@ import { finish, Query, splitCols, type Db, type Plan, type Result, type Row } f
 // Table and column names are checked against a strict pattern and quoted;
 // every value is passed as a parameter, never spliced into the SQL.
 
-const TABLES = new Set(["settings", "candidates", "emails", "candidate_events", "rubric_criteria"]);
+const TABLES = new Set(["settings", "candidates", "emails", "candidate_events", "rubric_criteria", "candidate_notes"]);
 const JSONB_COLUMNS = new Set(["dimension_scores", "brief", "ai_raw"]);
 
 function ident(name: string): string {

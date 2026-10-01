@@ -13,6 +13,8 @@ import { getSettings } from "@/lib/settings";
 import type { CandidateEvent, EmailRow } from "@/lib/types";
 import { ContactForm } from "./ContactForm";
 import { DraftEditor } from "./DraftEditor";
+import { Notes } from "./Notes";
+import { getNotes } from "@/lib/notes";
 
 const FLAG_TEXT: Record<string, string> = {
   location: "Based outside Mumbai, no mention of relocating (never affects the score)",
@@ -21,10 +23,11 @@ const FLAG_TEXT: Record<string, string> = {
 
 export default async function CandidatePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [candidates, settings, rubric, emailsRes, eventsRes] = await Promise.all([
+  const [candidates, settings, rubric, notes, emailsRes, eventsRes] = await Promise.all([
     allCandidates(),
     getSettings(),
     getRubric(),
+    getNotes(id),
     db().from("emails").select("*").eq("candidate_id", id).order("created_at", { ascending: false }),
     db().from("candidate_events").select("*").eq("candidate_id", id).order("created_at", { ascending: true }),
   ]);
@@ -144,6 +147,11 @@ export default async function CandidatePage({ params }: { params: Promise<{ id: 
           </Card>
         </div>
       )}
+
+      <Card>
+        <SectionTitle hint="Private to you, never sent to the AI">Your notes{notes.length ? ` (${notes.length})` : ""}</SectionTitle>
+        <Notes candidateId={c.id} notes={notes} />
+      </Card>
 
       {/* Routing + email */}
       {c.stage !== "processing" && (

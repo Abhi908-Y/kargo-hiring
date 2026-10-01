@@ -94,6 +94,13 @@ export interface CandidateEvent {
   detail: string | null;
 }
 
+export interface CandidateNote {
+  id: number;
+  created_at: string;
+  candidate_id: string;
+  body: string;
+}
+
 export interface RubricCriterionRow {
   id: number;
   role: Role;
