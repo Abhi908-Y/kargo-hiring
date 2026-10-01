@@ -57,6 +57,8 @@ export interface Candidate {
   decided_by: "auto" | "arjun" | null;
   sent_kind: EmailKind | null;
   band_locked: boolean;
+  /** another candidate already uses this email address */
+  same_email_as: string | null;
   sent_at: string | null;
 }
 

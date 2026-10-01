@@ -171,6 +171,9 @@ export function UploadClient() {
   const ready = items.filter((i) => i.status === "ready").length;
   const finished = items.filter((i) => ["done", "skipped", "error"].includes(i.status)).length;
   const active = items.filter((i) => i.status !== "error" || i.result).length;
+  const added = items.filter((i) => i.status === "done").length;
+  const skipped = items.filter((i) => i.status === "skipped").length;
+  const failed = items.filter((i) => i.status === "error").length;
 
   return (
     <div className="space-y-4">
@@ -302,13 +305,13 @@ export function UploadClient() {
                       <div
                         className={cx(
                           "h-full rounded-full transition-all duration-700",
-                          it.status === "error" ? "bg-rose-500" : it.status === "skipped" ? "bg-slate-400" : "bg-teal-600",
+                          it.status === "error" ? "bg-rose-500" : it.status === "skipped" ? "bg-amber-400" : "bg-teal-600",
                         )}
                         style={{ width: `${it.progress}%` }}
                       />
                     </div>
                     {it.message && (
-                      <p className={cx("mt-1.5 text-xs", it.status === "error" ? "text-rose-700" : it.status === "skipped" ? "text-slate-500" : "text-slate-600")}>
+                      <p className={cx("mt-1.5 text-xs", it.status === "error" ? "text-rose-700" : it.status === "skipped" ? "font-medium text-amber-800" : "text-slate-600")}>
                         {it.message}
                       </p>
                     )}
@@ -317,6 +320,15 @@ export function UploadClient() {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+      {finished > 0 && (
+        <div className="flex flex-wrap gap-2 text-sm">
+          <span className="rounded-lg bg-emerald-50 px-3 py-1.5 font-medium text-emerald-800">{added} added</span>
+          <span className={cx("rounded-lg px-3 py-1.5 font-medium", skipped ? "bg-amber-100 text-amber-900" : "bg-slate-100 text-slate-600")}>
+            {skipped} skipped as duplicates (same file or same CV text already uploaded)
+          </span>
+          <span className={cx("rounded-lg px-3 py-1.5 font-medium", failed ? "bg-rose-100 text-rose-800" : "bg-slate-100 text-slate-600")}>{failed} failed</span>
         </div>
       )}
       {drafting && (

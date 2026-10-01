@@ -125,7 +125,11 @@ alter table candidates add constraint candidates_stage_check
 alter table candidates drop constraint if exists candidates_band_check;
 alter table candidates add constraint candidates_band_check check (band in ('auto_reject', 'review', 'auto_invite'));
 
-create unique index if not exists candidates_email_unique on candidates (lower(email)) where email is not null;
+-- Several CVs may share an email address (e.g. test data), so email is NOT unique; uploads
+-- with a known address are kept and labelled via same_email_as.
+drop index if exists candidates_email_unique;
+create index if not exists candidates_email_idx on candidates (lower(email));
+alter table candidates add column if not exists same_email_as text;
 create index if not exists candidates_rank_idx on candidates (assigned_role, total_score desc nulls last);
 
 -- ---------------------------------------------------------------------------

@@ -60,6 +60,7 @@ export function CandidateCard(props: {
             {c.strong_pattern && c.stage === "review" && <Chip tone="violet">Strong Kargo pattern ({c.pattern_score}/60): check before rejecting</Chip>}
             {c.role_mismatch && <Chip tone="sky">May fit {otherRole} better</Chip>}
             {c.flags.includes("location") && <Chip>Outside Mumbai</Chip>}
+            {c.same_email_as && <Chip tone="amber">Same email as {c.same_email_as}</Chip>}
             {c.flags.includes("low_extraction_confidence") && <Chip tone="amber">CV text may be incomplete</Chip>}
           </div>
         </div>

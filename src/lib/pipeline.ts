@@ -104,9 +104,11 @@ export async function ingestCv(opts: {
   if (sameText.data) return duplicate(`a CV with identical text was already uploaded as "${sameText.data.file_name}"`);
 
   const contact = extractContact(extraction.text, opts.fileName);
+  // A shared email address is NOT treated as a duplicate (test CVs often share one); just label it.
+  let sameEmailAs: string | null = null;
   if (contact.email) {
-    const sameEmail = await db().from("candidates").select("id, file_name").eq("email", contact.email).maybeSingle();
-    if (sameEmail.data) return duplicate(`a CV with the same email address was already uploaded as "${sameEmail.data.file_name}"`);
+    const { data: same } = await db().from("candidates").select("full_name, file_name").eq("email", contact.email).limit(1);
+    if (same?.length) sameEmailAs = same[0].full_name ?? same[0].file_name;
   }
 
   const redacted = redactCv(extraction.text, contact, opts.fileName);
@@ -132,6 +134,7 @@ export async function ingestCv(opts: {
     extraction_warning: extraction.warning,
     tagged_role: opts.taggedRole,
     stage: "processing",
+    same_email_as: sameEmailAs,
   });
   if (error) {
     await db().files.remove(filePath);
@@ -496,10 +499,7 @@ export async function updateContact(id: string, input: { fullName?: string; emai
     patch.email = email || null;
   }
   const { error } = await db().from("candidates").update(patch).eq("id", id);
-  if (error) {
-    if (error.code === "23505") return { ok: false, status: 409, error: "Another candidate already has that email address." };
-    return { ok: false, status: 500, error: error.message };
-  }
+  if (error) return { ok: false, status: 500, error: error.message };
   await logEvent(id, "contact_updated");
   return { ok: true };
 }
