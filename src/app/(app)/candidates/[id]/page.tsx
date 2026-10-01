@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ScoreButton } from "@/components/PipelineButtons";
-import { SendButton, UndoButton } from "@/components/SendButton";
+import { MoveToReviewButton, SendButton } from "@/components/SendButton";
 import { Card, Chip, PageHeader, RoleChip, Score, ScoreBar, SectionTitle, StatusChip, cx, displayName, formatDateTime } from "@/components/ui";
 import { DIMENSIONS, PATTERN_MAX, ROLE_TITLES, type Role } from "@/config/scoring";
 import { db } from "@/lib/db";
@@ -38,7 +38,7 @@ export default async function CandidatePage({ params }: { params: Promise<{ id: 
   const ds = c.dimension_scores;
   const nameOf = (key: string) => rubric.find((r) => r.dimension_key === key)?.name ?? key;
   const weightOf = (key: string, r: Role) => rubric.find((x) => x.dimension_key === key && x.role === r)?.weight_pct;
-  const pending = c.stage === "invite_pending" || c.stage === "reject_pending";
+  const autoKind = c.stage === "auto_selected" ? ("invite" as const) : c.stage === "auto_rejected" ? ("rejection" as const) : null;
 
   let deliversTo: string | null = null;
   try {
@@ -160,17 +160,21 @@ export default async function CandidatePage({ params }: { params: Promise<{ id: 
           {c.route_reason && <p className="mb-3 text-sm text-slate-600">{c.route_reason}</p>}
           {c.draft_error && <p className="mb-3 text-xs text-amber-700">{c.draft_error}</p>}
 
-          {pending && c.email_scheduled_for && c.sent_kind && (
-            <div className="mb-4">
-              <UndoButton id={c.id} kind={c.sent_kind} scheduledFor={c.email_scheduled_for} />
+          {autoKind && (
+            <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
+              <span>
+                In the <b>{autoKind === "invite" ? "Auto-selected" : "Auto-rejected"}</b> column. Send from here, use &quot;Send to all&quot; on the
+                column page, or
+              </span>
+              <MoveToReviewButton id={c.id} size="sm" />
             </div>
           )}
 
           {c.stage === "drafting" && <p className="text-sm text-slate-500">Drafts are being written. Refresh in a moment, or use &quot;Write drafts now&quot; on the dashboard.</p>}
 
-          {(c.stage === "review" || pending) && (
+          {(c.stage === "review" || autoKind) && (
             <div className="grid gap-5 lg:grid-cols-2">
-              {(c.stage === "review" ? (["invite", "rejection"] as const) : ([c.sent_kind!] as const)).map((kind) => {
+              {(c.stage === "review" ? (["invite", "rejection"] as const) : ([autoKind!] as const)).map((kind) => {
                 const d = draftOf(c, kind);
                 if (!d.subject || !d.body) return null;
                 return (
@@ -185,7 +189,7 @@ export default async function CandidatePage({ params }: { params: Promise<{ id: 
                       <div className="text-sm font-medium text-slate-900">{personalise(d.subject, c.first_name, settings.calendarLink)}</div>
                       <pre className="mt-2 whitespace-pre-wrap font-sans text-sm text-slate-700">{personalise(d.body, c.first_name, settings.calendarLink)}</pre>
                     </div>
-                    {c.stage === "review" && (
+                    {(c.stage === "review" || autoKind) && (
                       <>
                         <SendButton id={c.id} kind={kind} to={c.email} />
                         <DraftEditor key={`${kind}-${c.updated_at}`} id={c.id} kind={kind} subject={d.subject} body={d.body} />

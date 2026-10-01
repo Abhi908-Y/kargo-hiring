@@ -5,24 +5,24 @@ import { db } from "@/lib/db";
 import { isDemoMode } from "@/lib/demo/mode";
 import { demoDraftEmail } from "@/lib/drafting/demo";
 import { draftEmail, LINK_TOKEN, NAME_TOKEN, personalise } from "@/lib/drafting/draft";
-import { cancelScheduledEmail, deliverEmail } from "@/lib/emails/send";
+import { deliverEmail } from "@/lib/emails/send";
 import { isCalendarPlaceholder } from "@/lib/emails/templates";
 import { env } from "@/lib/env";
 import { extractCvText, fileTypeFromName, MAX_FILE_BYTES } from "@/lib/extract";
 import { extractContact, normaliseForHash, redactCv } from "@/lib/redact";
 import { getRubric, weightsFrom } from "@/lib/rubric";
-import { bandFor, bandReason, hasLowExtractionFlag, summariseScores, weightedTotal, type Band } from "@/lib/scores";
+import { bandFor, bandReason, hasLowExtractionFlag, summariseScores, type Band } from "@/lib/scores";
 import { demoScoreCv } from "@/lib/scoring/demo";
 import { scoreCv } from "@/lib/scoring/score";
 import { getSettings } from "@/lib/settings";
-import type { Candidate, EmailKind, EmailRow } from "@/lib/types";
+import type { Candidate, EmailKind } from "@/lib/types";
 
 // The pipeline:
 //   upload -> score both rubrics (weighted by the Rubric page)
-//   -> band by score: below the reject line = automatic rejection,
-//      above the invite line = automatic invite, in between = Arjun's review queue
-//   -> AI drafts (both for review, one for automatic) -> send
-// Automatic emails are held for Settings.holdHours so Arjun can Undo.
+//   -> AI drafts -> placed by score: above the invite line = Auto-selected,
+//      below the reject line = Auto-rejected, in between = Review
+//   -> Arjun sends: one at a time, or a whole automatic column in bulk.
+// Nothing is ever emailed without Arjun clicking Send.
 
 export type Result<T = object> = ({ ok: true } & T) | { ok: false; status: number; error: string };
 
@@ -64,7 +64,7 @@ export function neededDrafts(c: Pick<Candidate, "band">): EmailKind[] {
 }
 
 export function missingDrafts(c: Candidate): EmailKind[] {
-  if (c.stage !== "drafting" && c.stage !== "review") return [];
+  if (!["drafting", "review", "auto_selected", "auto_rejected"].includes(c.stage)) return [];
   return neededDrafts(c).filter((k) => !(k === "invite" ? c.invite_body : c.rejection_body));
 }
 
@@ -161,8 +161,7 @@ const CLEARED_DRAFTS = {
 export async function scoreCandidate(id: string): Promise<Result<{ candidate: Candidate }>> {
   const c = await getCandidate(id);
   if (!c) return { ok: false, status: 404, error: "Candidate not found." };
-  if (c.stage === "sent" || c.stage === "invite_pending" || c.stage === "reject_pending")
-    return { ok: false, status: 409, error: "An email is already on its way to this candidate." };
+  if (c.stage === "sent") return { ok: false, status: 409, error: "An email was already sent to this candidate." };
 
   const [rubric, settings] = await Promise.all([getRubric(), getSettings()]);
 
@@ -213,6 +212,7 @@ export async function scoreCandidate(id: string): Promise<Result<{ candidate: Ca
       scoring_error: null,
       decided_by: null,
       email_scheduled_for: null,
+      band_locked: false,
       ...CLEARED_DRAFTS,
       updated_at: nowIso(),
     })
@@ -239,56 +239,64 @@ async function writeDraft(c: Candidate, kind: EmailKind) {
   await logEvent(c.id, `${kind}_drafted`, source === "ai" ? "Drafted by AI" : error ?? "Standard wording");
 }
 
-/** Why an automatic email can't go out, or null if it can. */
-function autoBlocker(c: Candidate, settings: Settings): string | null {
+/** Why a candidate can't go in an automatic column, or null if they can. */
+function autoBlocker(c: Candidate, band: Band, settings: Settings): string | null {
   if (!c.email) return "no email address was found in the CV";
   if (c.extraction_warning || hasLowExtractionFlag(c.flags)) return "the CV text may be incomplete, so a person should check it";
-  if (c.band === "auto_reject" && c.strong_pattern)
+  if (band === "auto_reject" && c.strong_pattern)
     return `the pattern score is strong (${c.pattern_score}/60), so the rubric's rescue rule sends it to review`;
-  if (c.band === "auto_invite" && !env.testMode() && isCalendarPlaceholder(settings.calendarLink))
+  if (band === "auto_invite" && !env.testMode() && isCalendarPlaceholder(settings.calendarLink))
     return "the interview calendar link isn't set in Settings";
   return null;
 }
 
-/** Once a candidate's drafts are written: schedule the automatic email, or put them in review. */
-async function route(id: string) {
-  const c = await getCandidate(id);
-  if (!c || c.stage !== "drafting" || missingDrafts(c).length) return;
-  const settings = await getSettings();
+const STAGE_FOR: Record<Band, "auto_selected" | "review" | "auto_rejected"> = {
+  auto_invite: "auto_selected",
+  review: "review",
+  auto_reject: "auto_rejected",
+};
 
-  // Only an explicit auto band sends anything; no band (older rows) means review.
-  if (c.band !== "auto_invite" && c.band !== "auto_reject") {
-    await db().from("candidates").update({ stage: "review", updated_at: nowIso() }).eq("id", id).eq("stage", "drafting");
-    return;
-  }
-
-  const blocker = autoBlocker(c, settings);
-  if (blocker) {
-    // Needs Arjun: switch to the review band; the missing second draft gets written next.
-    await db()
-      .from("candidates")
-      .update({ band: "review" satisfies Band, route_reason: `${c.route_reason} Sent to review instead: ${blocker}.`, updated_at: nowIso() })
-      .eq("id", id);
-    await logEvent(id, "moved_to_review", blocker);
-    return;
-  }
-
-  const kind: EmailKind = c.band === "auto_invite" ? "invite" : "rejection";
-  const scheduledAt = settings.holdHours > 0 ? new Date(Date.now() + settings.holdHours * 3600_000) : undefined;
-  const sent = await sendEmail(c, kind, { trigger: "auto", scheduledAt, fromStage: "drafting" });
-  if (!sent.ok) {
-    await db()
-      .from("candidates")
-      .update({ band: "review" satisfies Band, route_reason: `${c.route_reason} Sent to review instead: the email couldn't be sent (${sent.error}).`, updated_at: nowIso() })
-      .eq("id", id);
-  }
+/**
+ * Where a scored candidate belongs: Auto-selected (above the invite line),
+ * Auto-rejected (below the reject line) or Review. A safety check, or Arjun
+ * moving them by hand, always means Review. Nothing is emailed here.
+ */
+function placement(c: Candidate, settings: Settings): { band: Band; reason: string } {
+  if (c.band_locked) return { band: "review", reason: c.route_reason ?? "Moved to review by you." };
+  const total = c.total_score ?? 0;
+  const band = bandFor(total, settings);
+  const reason = bandReason(total, band, settings);
+  if (band === "review") return { band, reason };
+  const blocker = autoBlocker(c, band, settings);
+  return blocker ? { band: "review", reason: `${reason} Sent to review instead: ${blocker}.` } : { band, reason };
 }
 
-/** Write the next missing draft (one AI call), then route that candidate. The upload page calls this until remaining is 0. */
+const PLACEABLE = ["drafting", "review", "auto_selected", "auto_rejected"];
+
+/** Put a candidate in their column once the drafts that column needs exist. */
+async function place(id: string, settings?: Settings) {
+  const c = await getCandidate(id);
+  if (!c || !PLACEABLE.includes(c.stage)) return;
+  const { band, reason } = placement(c, settings ?? (await getSettings()));
+  const stage = missingDrafts({ ...c, band, stage: "drafting" }).length ? "drafting" : STAGE_FOR[band];
+  if (stage === c.stage && band === c.band && reason === c.route_reason) return;
+  await db().from("candidates").update({ band, route_reason: reason, stage, updated_at: nowIso() }).eq("id", id).eq("stage", c.stage);
+  if (stage !== c.stage && stage !== "drafting") await logEvent(id, `placed_${stage}`, reason);
+}
+
+/** Re-sort everyone not yet emailed, e.g. after the thresholds or rubric weights change. */
+export async function resortCandidates(): Promise<number> {
+  const settings = await getSettings();
+  const list = (await allCandidates()).filter((c) => PLACEABLE.includes(c.stage));
+  for (const c of list) await place(c.id, settings);
+  return list.length;
+}
+
+/** Write the next missing draft (one AI call), then place that candidate. The upload page calls this until remaining is 0. */
 export async function refreshNextDraft(): Promise<{ drafted: string | null; remaining: number }> {
   const candidates = await allCandidates();
-  // Candidates whose drafts are already complete but still in "drafting" just need routing.
-  for (const c of candidates.filter((x) => x.stage === "drafting" && missingDrafts(x).length === 0)) await route(c.id);
+  // Candidates whose drafts are already complete but still in "drafting" just need placing.
+  for (const c of candidates.filter((x) => x.stage === "drafting" && missingDrafts(x).length === 0)) await place(c.id);
 
   const pending = (await allCandidates())
     .filter((c) => missingDrafts(c).length)
@@ -297,16 +305,18 @@ export async function refreshNextDraft(): Promise<{ drafted: string | null; rema
 
   const next = pending[0];
   await writeDraft(next, missingDrafts(next)[0]);
-  await route(next.id);
+  await place(next.id);
 
   const remaining = (await allCandidates()).reduce((n, c) => n + missingDrafts(c).length, 0);
   return { drafted: next.id, remaining };
 }
 
+const EDITABLE_STAGES = ["review", "auto_selected", "auto_rejected"];
+
 export async function regenerateDraft(id: string, kind: EmailKind): Promise<Result> {
   const c = await getCandidate(id);
   if (!c) return { ok: false, status: 404, error: "Candidate not found." };
-  if (c.stage !== "review") return { ok: false, status: 409, error: "Drafts can only be rewritten while the candidate is in review." };
+  if (!EDITABLE_STAGES.includes(c.stage)) return { ok: false, status: 409, error: "Drafts can't be changed now (already sent, or still being written)." };
   await writeDraft(c, kind);
   return { ok: true };
 }
@@ -323,22 +333,42 @@ export async function saveDraft(id: string, kind: EmailKind, input: { subject: s
     .from("candidates")
     .update({ ...fields, updated_at: nowIso() })
     .eq("id", id)
-    .eq("stage", "review")
+    .in("stage", EDITABLE_STAGES)
     .select("id");
-  if (!data?.length) return { ok: false, status: 409, error: "Drafts can only be edited while the candidate is in review." };
+  if (!data?.length) return { ok: false, status: 409, error: "Drafts can't be edited now (already sent, or still being written)." };
   await logEvent(id, `${kind}_edited`);
   return { ok: true };
 }
 
+/** Arjun disagrees with an automatic column: move the candidate to Review and keep them there. */
+export async function moveToReview(id: string): Promise<Result> {
+  const c = await getCandidate(id);
+  if (!c) return { ok: false, status: 404, error: "Candidate not found." };
+  if (c.stage !== "auto_selected" && c.stage !== "auto_rejected")
+    return { ok: false, status: 409, error: "Only auto-selected or auto-rejected candidates can be moved." };
+  await db()
+    .from("candidates")
+    .update({
+      band: "review",
+      band_locked: true,
+      route_reason: `Moved to review by you (was ${c.stage === "auto_selected" ? "auto-selected" : "auto-rejected"} with ${c.total_score}).`,
+      // Review needs both drafts; "drafting" lets the refresh loop write the missing one.
+      stage: missingDrafts({ ...c, band: "review", stage: "drafting" }).length ? "drafting" : "review",
+      updated_at: nowIso(),
+    })
+    .eq("id", id)
+    .eq("stage", c.stage);
+  await logEvent(id, "moved_to_review", "By Arjun");
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------------------
-// Sending
+// Sending (only ever when Arjun clicks Send: one candidate, or a whole column)
 // ---------------------------------------------------------------------------
 
-async function sendEmail(
-  c: Candidate,
-  kind: EmailKind,
-  opts: { trigger: "auto" | "arjun"; scheduledAt?: Date; fromStage: "drafting" | "review" },
-): Promise<Result> {
+type SendableStage = "review" | "auto_selected" | "auto_rejected";
+
+async function sendEmail(c: Candidate, kind: EmailKind, opts: { trigger: "auto" | "arjun"; fromStage: SendableStage }): Promise<Result> {
   const d = draftOf(c, kind);
   if (!d.subject || !d.body) return { ok: false, status: 409, error: `There's no ${kind} draft yet.` };
   if (!c.email) return { ok: false, status: 400, error: "No email address. Add one on the candidate page." };
@@ -351,19 +381,10 @@ async function sendEmail(
   if (subject.includes(NAME_TOKEN) || text.includes(NAME_TOKEN)) return { ok: false, status: 400, error: "The draft still contains [NAME]." };
   if (!env.testMode() && text.includes(LINK_TOKEN)) return { ok: false, status: 400, error: "The draft still contains {calendar_link}." };
 
-  const held = Boolean(opts.scheduledAt);
-  const nextStage = held ? (kind === "invite" ? "invite_pending" : "reject_pending") : "sent";
   // Claim atomically so a double-click (or two tabs) can't send two emails.
   const { data: claimed } = await db()
     .from("candidates")
-    .update({
-      stage: nextStage,
-      sent_kind: kind,
-      decided_by: opts.trigger,
-      email_scheduled_for: opts.scheduledAt?.toISOString() ?? null,
-      sent_at: held ? null : nowIso(),
-      updated_at: nowIso(),
-    })
+    .update({ stage: "sent", sent_kind: kind, decided_by: opts.trigger, sent_at: nowIso(), updated_at: nowIso() })
     .eq("id", c.id)
     .eq("stage", opts.fromStage)
     .select("id");
@@ -381,20 +402,19 @@ async function sendEmail(
       body_text: text,
       body_html: "",
       status: "queued",
-      scheduled_for: opts.scheduledAt?.toISOString() ?? null,
     })
     .select("*")
     .single();
 
   try {
     if (error || !row) throw new Error(error?.message ?? "could not record the email");
-    const result = await deliverEmail({ intendedTo: c.email, subject, text, idempotencyKey: row.id, scheduledAt: opts.scheduledAt });
+    const result = await deliverEmail({ intendedTo: c.email, subject, text, idempotencyKey: row.id });
     await db()
       .from("emails")
       .update({
-        status: held ? "scheduled" : "sent",
+        status: "sent",
         simulated: result.status === "simulated",
-        sent_at: held ? null : nowIso(),
+        sent_at: nowIso(),
         resend_id: result.resendId,
         delivered_to: result.deliveredTo,
         from_address: result.fromAddress,
@@ -408,78 +428,37 @@ async function sendEmail(
     if (row) await db().from("emails").update({ status: "failed", error: message }).eq("id", row.id);
     await db()
       .from("candidates")
-      .update({ stage: opts.fromStage, sent_kind: null, decided_by: null, email_scheduled_for: null, sent_at: null, updated_at: nowIso() })
+      .update({ stage: opts.fromStage, sent_kind: null, decided_by: null, sent_at: null, updated_at: nowIso() })
       .eq("id", c.id);
     return { ok: false, status: 502, error: `Email failed, nothing was sent: ${message}` };
   }
 
-  await logEvent(
-    c.id,
-    held ? `auto_${kind}_scheduled` : `${kind}_sent`,
-    held ? `Automatic; held until ${opts.scheduledAt!.toISOString()}` : opts.trigger === "auto" ? "Automatic" : "Sent by Arjun",
-  );
+  await logEvent(c.id, `${kind}_sent`, opts.trigger === "auto" ? "Bulk send from the automatic column" : "Sent by Arjun");
   return { ok: true };
 }
 
-/** Arjun's decision in the review queue: send the invite or the rejection now. */
+/** One candidate: Arjun clicks Send on a card. */
 export async function sendDraft(id: string, kind: EmailKind): Promise<Result> {
   const c = await getCandidate(id);
   if (!c) return { ok: false, status: 404, error: "Candidate not found." };
   if (c.stage === "sent") return { ok: false, status: 409, error: "Already sent." };
-  if (c.stage === "invite_pending" || c.stage === "reject_pending")
-    return { ok: false, status: 409, error: "An automatic email is already scheduled. Use Undo first." };
-  if (c.stage !== "review") return { ok: false, status: 409, error: "This candidate isn't ready yet (drafts still being written)." };
-  return sendEmail(c, kind, { trigger: "arjun", fromStage: "review" });
+  if (!EDITABLE_STAGES.includes(c.stage)) return { ok: false, status: 409, error: "This candidate isn't ready yet (drafts still being written)." };
+  return sendEmail(c, kind, { trigger: "arjun", fromStage: c.stage as SendableStage });
 }
 
-/** Cancel a held automatic email and move the candidate to review. */
-export async function undo(id: string): Promise<Result> {
-  const c = await getCandidate(id);
-  if (!c) return { ok: false, status: 404, error: "Candidate not found." };
-  if (c.stage !== "invite_pending" && c.stage !== "reject_pending") return { ok: false, status: 409, error: "There's no held email to undo." };
-  if (c.email_scheduled_for && new Date(c.email_scheduled_for).getTime() <= Date.now())
-    return { ok: false, status: 409, error: "Too late: the email has already gone out." };
-
-  const { data: email } = await db()
-    .from("emails")
-    .select("*")
-    .eq("candidate_id", id)
-    .eq("status", "scheduled")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const cancelError = await cancelScheduledEmail((email as EmailRow | null)?.resend_id ?? null);
-  if (cancelError) return { ok: false, status: 409, error: `Couldn't cancel the email: ${cancelError}` };
-  if (email) await db().from("emails").update({ status: "cancelled", cancelled_at: nowIso() }).eq("id", email.id);
-
-  // Review needs both drafts; "drafting" lets the refresh loop write the missing one, then it moves to review.
-  await db()
-    .from("candidates")
-    .update({
-      stage: "drafting",
-      band: "review",
-      route_reason: `${c.route_reason ?? ""} Undo by Arjun: email cancelled, moved to review.`.trim(),
-      sent_kind: null,
-      decided_by: null,
-      email_scheduled_for: null,
-      updated_at: nowIso(),
-    })
-    .eq("id", id);
-  await logEvent(id, "undo", "Held email cancelled; moved to review");
-  return { ok: true };
-}
-
-/** Mark held emails whose time has passed as sent. Runs on page loads, so no cron job is needed. */
-export async function finalizeDue(): Promise<void> {
-  const now = nowIso();
-  for (const stage of ["invite_pending", "reject_pending"]) {
-    const { data } = await db().from("candidates").select("id, email_scheduled_for").eq("stage", stage).lte("email_scheduled_for", now);
-    for (const c of data ?? []) {
-      await db().from("candidates").update({ stage: "sent", sent_at: c.email_scheduled_for }).eq("id", c.id).eq("stage", stage);
-    }
+/** A whole column: Arjun clicks "Send to all" on Auto-selected or Auto-rejected. */
+export async function bulkSend(column: "auto_selected" | "auto_rejected"): Promise<{ sent: number; failed: { name: string; error: string }[] }> {
+  const kind: EmailKind = column === "auto_selected" ? "invite" : "rejection";
+  const list = (await allCandidates()).filter((c) => c.stage === column);
+  const failed: { name: string; error: string }[] = [];
+  let sent = 0;
+  for (const c of list) {
+    const r = await sendEmail(c, kind, { trigger: "auto", fromStage: column });
+    if (r.ok) sent++;
+    else failed.push({ name: c.full_name ?? c.file_name, error: r.error });
+    await new Promise((res) => setTimeout(res, 600)); // stay under Resend's rate limit
   }
-  const { data: due } = await db().from("emails").select("id, scheduled_for").eq("status", "scheduled").lte("scheduled_for", now);
-  for (const e of due ?? []) await db().from("emails").update({ status: "sent", sent_at: e.scheduled_for }).eq("id", e.id);
+  return { sent, failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -495,9 +474,10 @@ export async function recomputeTotals(): Promise<number> {
     const role = c.assigned_role ?? s.assignedRole;
     await db()
       .from("candidates")
-      .update({ score_pm: weightedTotal(s.scores, "PM", weights), score_spm: weightedTotal(s.scores, "SPM", weights), total_score: s.totals[role] })
+      .update({ score_pm: s.totals.PM, score_spm: s.totals.SPM, total_score: s.totals[role] })
       .eq("id", c.id);
   }
+  await resortCandidates();
   return list.length;
 }
 

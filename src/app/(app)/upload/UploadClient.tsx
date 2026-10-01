@@ -19,9 +19,9 @@ interface Item {
 
 const MAX_BYTES = 4 * 1024 * 1024;
 const BAND_TEXT: Record<string, string> = {
-  auto_invite: "automatic invite",
-  auto_reject: "automatic rejection",
-  review: "your review queue",
+  auto_invite: "Auto-selected",
+  auto_reject: "Auto-rejected",
+  review: "Review",
 };
 
 function validate(file: File): string | null {
@@ -322,7 +322,7 @@ export function UploadClient() {
       {drafting && (
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="mb-1 flex justify-between text-xs text-slate-600">
-            <span>Writing interview briefs and email drafts, then sending or queuing</span>
+            <span>Writing interview briefs and email drafts, then sorting into columns</span>
             <span className="tabular-nums">
               {drafting.done} of {drafting.total || "…"}
             </span>

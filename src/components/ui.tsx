@@ -30,10 +30,11 @@ export function RoleChip({ role, inferred }: { role: Role | null; inferred?: boo
 
 export function StatusChip({ stage, band, sentKind }: { stage: Stage; band: Band | null; sentKind: "invite" | "rejection" | null }) {
   if (stage === "sent") return <Chip tone="emerald">✓ {sentKind === "invite" ? "Invite" : "Rejection"} sent</Chip>;
-  if (stage === "invite_pending") return <Chip tone="emerald">Auto-invite · on hold</Chip>;
-  if (stage === "reject_pending") return <Chip tone="rose">Auto-reject · on hold</Chip>;
+  if (stage === "auto_selected") return <Chip tone="emerald">Auto-selected</Chip>;
+  if (stage === "auto_rejected") return <Chip tone="rose">Auto-rejected</Chip>;
   if (stage === "review") return <Chip tone="amber">Needs your review</Chip>;
   if (stage === "drafting") return <Chip>Writing drafts…</Chip>;
+  if (stage === "invite_pending" || stage === "reject_pending") return <Chip>Scheduled (old)</Chip>;
   if (band) return <Chip>{band.replace("_", "-")}</Chip>;
   return <Chip>Not scored</Chip>;
 }

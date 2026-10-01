@@ -42,11 +42,13 @@ insert into settings (id) values (1) on conflict (id) do nothing;
 
 -- ---------------------------------------------------------------------------
 -- Candidates
--- stage: processing  -> uploaded, not scored (or scoring failed)
---        drafting    -> scored, email drafts being written
---        review      -> middle band: waiting for Arjun
---        invite_pending / reject_pending -> automatic email held (Undo available)
---        sent        -> email gone (sent_kind says which)
+-- stage: processing    -> uploaded, not scored (or scoring failed)
+--        drafting      -> scored, email drafts being written
+--        auto_selected -> score above the invite line: invite draft ready, waiting for bulk send
+--        review        -> middle band: waiting for Arjun's decision
+--        auto_rejected -> score below the reject line: rejection draft ready, waiting for bulk send
+--        sent          -> email gone (sent_kind says which)
+-- Nothing is ever emailed without Arjun clicking Send (one, or all in a column).
 -- ---------------------------------------------------------------------------
 create table if not exists candidates (
   id                  uuid primary key default gen_random_uuid(),
@@ -106,6 +108,8 @@ alter table candidates add column if not exists email_scheduled_for timestamptz;
 alter table candidates add column if not exists decided_by text;
 alter table candidates add column if not exists sent_kind text;
 alter table candidates add column if not exists sent_at timestamptz;
+-- band_locked: Arjun moved them to review by hand, so re-sorting leaves them there
+alter table candidates add column if not exists band_locked boolean not null default false;
 -- from the previous version (single draft + top-N)
 alter table candidates drop column if exists draft_kind;
 alter table candidates drop column if exists draft_subject;
@@ -117,7 +121,7 @@ update candidates set stage = 'drafting' where stage = 'scored';
 -- rows scored before bands existed go to review; nothing is ever sent for them automatically
 update candidates set band = 'review' where band is null and stage <> 'processing';
 alter table candidates add constraint candidates_stage_check
-  check (stage in ('processing', 'drafting', 'review', 'invite_pending', 'reject_pending', 'sent'));
+  check (stage in ('processing', 'drafting', 'review', 'auto_selected', 'auto_rejected', 'invite_pending', 'reject_pending', 'sent'));
 alter table candidates drop constraint if exists candidates_band_check;
 alter table candidates add constraint candidates_band_check check (band in ('auto_reject', 'review', 'auto_invite'));
 

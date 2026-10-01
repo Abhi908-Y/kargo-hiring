@@ -3,7 +3,7 @@ import { dimensionsForRole, type Role } from "@/config/scoring";
 import { personalise } from "@/lib/drafting/draft";
 import { draftOf } from "@/lib/pipeline";
 import type { Candidate, EmailKind } from "@/lib/types";
-import { SendButton, UndoButton } from "./SendButton";
+import { MoveToReviewButton, SendButton } from "./SendButton";
 import { Chip, RoleChip, Score, ScoreBar, StatusChip, cx, displayName, formatDateTime } from "./ui";
 
 function DraftPreview(props: { c: Candidate; kind: EmailKind; calendarLink: string; open?: boolean; action?: React.ReactNode }) {
@@ -37,13 +37,13 @@ export function CandidateCard(props: {
   const score = role === "PM" ? c.score_pm : c.score_spm;
   const otherRole: Role = role === "PM" ? "SPM" : "PM";
   const otherScore = role === "PM" ? c.score_spm : c.score_pm;
-  const pending = c.stage === "invite_pending" || c.stage === "reject_pending";
+  const autoKind: EmailKind | null = c.stage === "auto_selected" ? "invite" : c.stage === "auto_rejected" ? "rejection" : null;
 
   return (
     <article
       className={cx(
         "rounded-2xl border bg-white p-4 sm:p-5",
-        c.stage === "review" ? "border-amber-300" : c.band === "auto_invite" ? "border-emerald-300" : "border-slate-200",
+        c.stage === "review" ? "border-amber-300" : c.stage === "auto_selected" ? "border-emerald-300" : c.stage === "auto_rejected" ? "border-rose-200" : "border-slate-200",
       )}
     >
       <div className="flex items-start justify-between gap-4">
@@ -97,16 +97,19 @@ export function CandidateCard(props: {
             <DraftPreview c={c} kind="rejection" calendarLink={props.calendarLink} action={<SendButton id={c.id} kind="rejection" to={c.email} size="sm" />} />
           </>
         )}
-        {pending && c.sent_kind && <DraftPreview c={c} kind={c.sent_kind} calendarLink={props.calendarLink} />}
+        {autoKind && <DraftPreview c={c} kind={autoKind} calendarLink={props.calendarLink} />}
         {c.stage === "sent" && c.sent_kind && <DraftPreview c={c} kind={c.sent_kind} calendarLink={props.calendarLink} />}
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
-        {pending && c.email_scheduled_for && c.sent_kind ? (
-          <UndoButton id={c.id} kind={c.sent_kind} scheduledFor={c.email_scheduled_for} size="sm" />
+        {autoKind ? (
+          <div className="flex flex-wrap items-start gap-2">
+            <SendButton id={c.id} kind={autoKind} to={c.email} size="sm" label={autoKind === "invite" ? "Send invite now" : "Send rejection now"} />
+            <MoveToReviewButton id={c.id} size="sm" />
+          </div>
         ) : c.stage === "sent" ? (
           <span className="text-sm text-emerald-700">
-            {c.sent_kind === "invite" ? "Invite" : "Rejection"} sent {formatDateTime(c.sent_at)} {c.decided_by === "auto" ? "(automatic)" : "(by you)"}
+            {c.sent_kind === "invite" ? "Invite" : "Rejection"} sent {formatDateTime(c.sent_at)} {c.decided_by === "auto" ? "(bulk send)" : "(by you)"}
           </span>
         ) : c.stage === "drafting" ? (
           <span className="text-xs text-slate-500">Drafts are being written…</span>
@@ -116,7 +119,7 @@ export function CandidateCard(props: {
           <span />
         )}
         <Link href={`/candidates/${c.id}`} className="text-sm font-medium text-teal-700 hover:underline">
-          Details{c.stage === "review" ? " & edit drafts" : ""} →
+          Details{c.stage !== "sent" ? " & edit drafts" : ""} →
         </Link>
       </div>
     </article>

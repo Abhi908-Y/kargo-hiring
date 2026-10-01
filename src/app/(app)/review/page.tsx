@@ -18,7 +18,7 @@ export default async function ReviewPage() {
     <div>
       <PageHeader
         title="Review queue"
-        subtitle={`Scores from ${settings.autoRejectBelow} to ${settings.autoInviteAbove}, plus anyone moved here by Undo or a safety check. Highest score first. Each has an invite and a rejection draft ready: open one and send it.`}
+        subtitle={`Scores from ${settings.autoRejectBelow} to ${settings.autoInviteAbove}, plus anyone you moved here or a safety check sent here. Highest score first. Each has an invite and a rejection draft ready: open one and send it.`}
       />
       {queue.length === 0 ? (
         <EmptyState>Nothing waiting for review.</EmptyState>

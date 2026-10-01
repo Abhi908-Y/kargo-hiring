@@ -1,11 +1,11 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { cx } from "./ui";
 
-/** Review queue: Arjun sends the invite or the rejection right now. */
-export function SendButton(props: { id: string; kind: "invite" | "rejection"; to: string | null; size?: "sm" | "md" }) {
+/** Send one candidate's invite or rejection right now. */
+export function SendButton(props: { id: string; kind: "invite" | "rejection"; to: string | null; size?: "sm" | "md"; label?: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +43,7 @@ export function SendButton(props: { id: string; kind: "invite" | "rejection"; to
           props.size === "sm" ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm",
         )}
       >
-        {busy ? "Sending…" : props.kind === "invite" ? "Approve: send invite" : "Reject: send rejection"}
+        {busy ? "Sending…" : (props.label ?? (props.kind === "invite" ? "Approve: send invite" : "Reject: send rejection"))}
       </button>
       {!props.to && <p className="text-xs text-rose-700">No email address. Add one on the candidate page.</p>}
       {error && <p className="text-xs text-rose-700">{error}</p>}
@@ -51,59 +51,89 @@ export function SendButton(props: { id: string; kind: "invite" | "rejection"; to
   );
 }
 
-function timeLeft(iso: string, now: number) {
-  const ms = new Date(iso).getTime() - now;
-  if (ms <= 0) return "sending now";
-  const minutes = Math.ceil(ms / 60_000);
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return h > 0 ? `in ${h}h ${m}m` : `in ${m}m`;
-}
-
-/** Automatic email on hold: shows the countdown and cancels it (moves to review). */
-export function UndoButton(props: { id: string; kind: "invite" | "rejection"; scheduledFor: string; size?: "sm" | "md" }) {
+/** Take a candidate out of an automatic column and put them in Review. */
+export function MoveToReviewButton({ id, size }: { id: string; size?: "sm" | "md" }) {
   const router = useRouter();
-  const [now, setNow] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const tick = () => setNow(Date.now());
-    const first = setTimeout(tick, 0);
-    const t = setInterval(tick, 30_000);
-    return () => {
-      clearTimeout(first);
-      clearInterval(t);
-    };
-  }, []);
-
   return (
     <div className="space-y-1">
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            setError(null);
-            const res = await fetch(`/api/candidates/${props.id}/undo`, { method: "POST" }).catch(() => null);
-            const data = res ? await res.json().catch(() => ({})) : {};
-            if (!res?.ok) setError(data.error ?? "Couldn't undo.");
-            setBusy(false);
-            router.refresh();
-          }}
-          className={cx(
-            "rounded-lg bg-slate-900 font-semibold text-white hover:bg-slate-800 disabled:opacity-50",
-            props.size === "sm" ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm",
-          )}
-        >
-          {busy ? "Cancelling…" : "Undo"}
-        </button>
-        <span className="text-xs text-slate-600">
-          Automatic {props.kind === "invite" ? "invite" : "rejection"} goes out {now ? timeLeft(props.scheduledFor, now) : ""}
-        </span>
-      </div>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setError(null);
+          const res = await fetch(`/api/candidates/${id}/move`, { method: "POST" }).catch(() => null);
+          const data = res ? await res.json().catch(() => ({})) : {};
+          if (!res?.ok) setError(data.error ?? "Couldn't move.");
+          setBusy(false);
+          router.refresh();
+        }}
+        className={cx(
+          "rounded-lg bg-white font-semibold text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 disabled:opacity-50",
+          size === "sm" ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm",
+        )}
+      >
+        {busy ? "Moving…" : "Move to review"}
+      </button>
       {error && <p className="text-xs text-rose-700">{error}</p>}
+    </div>
+  );
+}
+
+/** "Send to all" for a whole automatic column. */
+export function BulkSendButton({ column, count }: { column: "auto_selected" | "auto_rejected"; count: number }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ sent: number; failed: { name: string; error: string }[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const invite = column === "auto_selected";
+  const what = invite ? "interview invite" : "rejection";
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        disabled={busy || count === 0}
+        onClick={async () => {
+          if (!window.confirm(`Send the ${what} to all ${count} candidate${count === 1 ? "" : "s"} in this column?`)) return;
+          setBusy(true);
+          setError(null);
+          setResult(null);
+          const res = await fetch("/api/bulk-send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ column }),
+          }).catch(() => null);
+          const data = res ? await res.json().catch(() => null) : null;
+          if (!res?.ok || !data) setError(data?.error ?? "Bulk send failed. Some emails may have gone; check Sent emails.");
+          else setResult(data);
+          setBusy(false);
+          router.refresh();
+        }}
+        className={cx(
+          "rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50",
+          invite ? "bg-emerald-600 hover:bg-emerald-700" : "bg-rose-600 hover:bg-rose-700",
+        )}
+      >
+        {busy ? `Sending ${count}…` : `Send ${invite ? "invites" : "rejections"} to all ${count}`}
+      </button>
+      {result && (
+        <div className="text-sm">
+          <p className="text-emerald-700">Sent {result.sent}.</p>
+          {result.failed.length > 0 && (
+            <ul className="mt-1 space-y-0.5 text-xs text-rose-700">
+              {result.failed.map((f) => (
+                <li key={f.name}>
+                  {f.name}: {f.error}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {error && <p className="text-sm text-rose-700">{error}</p>}
     </div>
   );
 }

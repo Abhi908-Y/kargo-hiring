@@ -2,7 +2,7 @@ import type { DimensionKey, Role } from "@/config/scoring";
 import type { Band } from "@/lib/scores";
 import type { DimensionScore } from "@/lib/scoring/schema";
 
-export type Stage = "processing" | "drafting" | "review" | "invite_pending" | "reject_pending" | "sent";
+export type Stage = "processing" | "drafting" | "review" | "auto_selected" | "auto_rejected" | "invite_pending" | "reject_pending" | "sent";
 export type EmailKind = "invite" | "rejection";
 
 export interface Brief {
@@ -56,6 +56,7 @@ export interface Candidate {
   email_scheduled_for: string | null;
   decided_by: "auto" | "arjun" | null;
   sent_kind: EmailKind | null;
+  band_locked: boolean;
   sent_at: string | null;
 }
 

@@ -66,7 +66,7 @@ function withDefaults(table: string, row: Row, t: Tables): Row {
         personal_line: null, flags: [], ai_raw: null, model: null, scored_at: null, scoring_error: null,
         band: null, route_reason: null, interview_brief: null, invite_subject: null, invite_body: null,
         invite_source: null, rejection_subject: null, rejection_body: null, rejection_source: null,
-        draft_error: null, drafted_at: null, email_scheduled_for: null, decided_by: null, sent_kind: null, sent_at: null,
+        draft_error: null, drafted_at: null, email_scheduled_for: null, decided_by: null, sent_kind: null, sent_at: null, band_locked: false,
         ...row,
       };
     case "emails":

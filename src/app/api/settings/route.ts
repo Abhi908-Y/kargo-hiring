@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { DEFAULT_SETTINGS } from "@/config/scoring";
 import { requireAdminApi } from "@/lib/auth";
+import { resortCandidates } from "@/lib/pipeline";
 import { saveSettings, validateSettings } from "@/lib/settings";
 
 export const runtime = "nodejs";
+export const maxDuration = 120;
 
 export async function POST(request: Request) {
   const auth = await requireAdminApi();
@@ -15,5 +17,7 @@ export async function POST(request: Request) {
   if (typeof settings === "string") return NextResponse.json({ error: settings }, { status: 400 });
 
   await saveSettings(settings);
-  return NextResponse.json({ settings });
+  // New thresholds re-sort everyone not yet emailed into the right column.
+  const resorted = await resortCandidates();
+  return NextResponse.json({ settings, resorted });
 }

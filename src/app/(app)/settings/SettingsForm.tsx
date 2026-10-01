@@ -25,38 +25,32 @@ export function SettingsForm({ initial, defaults }: { initial: Settings; default
     if (!res.ok) return setMsg({ ok: false, text: data.error ?? "Couldn't save." });
     const saved = data.settings as Settings;
     setS({ autoRejectBelow: String(saved.autoRejectBelow), autoInviteAbove: String(saved.autoInviteAbove), holdHours: String(saved.holdHours), calendarLink: saved.calendarLink });
-    setMsg({ ok: true, text: "Saved. Applies to CVs scored from now on." });
+    setMsg({ ok: true, text: `Saved. ${data.resorted ?? 0} candidate(s) re-sorted into columns.` });
     router.refresh();
   }
 
   const input = "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-teal-600";
   const lo = Number(s.autoRejectBelow);
   const hi = Number(s.autoInviteAbove);
-  const hold = Number(s.holdHours);
 
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        post({ autoRejectBelow: lo, autoInviteAbove: hi, holdHours: hold, calendarLink: s.calendarLink });
+        post({ autoRejectBelow: lo, autoInviteAbove: hi, holdHours: Number(s.holdHours), calendarLink: s.calendarLink });
       }}
       className="space-y-5"
     >
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2">
         <label className="block">
           <span className="text-sm font-medium text-slate-800">Auto-reject below</span>
           <input type="number" min={0} max={100} value={s.autoRejectBelow} onChange={set("autoRejectBelow")} className={`${input} tabular-nums`} />
-          <span className="mt-1 block text-xs text-slate-500">Score under this: rejection sent automatically. Default {defaults.autoRejectBelow}.</span>
+          <span className="mt-1 block text-xs text-slate-500">Score under this goes to the Auto-rejected column. Default {defaults.autoRejectBelow}.</span>
         </label>
         <label className="block">
           <span className="text-sm font-medium text-slate-800">Auto-invite above</span>
           <input type="number" min={0} max={100} value={s.autoInviteAbove} onChange={set("autoInviteAbove")} className={`${input} tabular-nums`} />
-          <span className="mt-1 block text-xs text-slate-500">Score over this: interview invite sent automatically. Default {defaults.autoInviteAbove}.</span>
-        </label>
-        <label className="block">
-          <span className="text-sm font-medium text-slate-800">Hold automatic emails (hours)</span>
-          <input type="number" min={0} max={72} step={0.25} value={s.holdHours} onChange={set("holdHours")} className={`${input} tabular-nums`} />
-          <span className="mt-1 block text-xs text-slate-500">Time to press Undo before they go. 0 = send immediately. Default {defaults.holdHours}.</span>
+          <span className="mt-1 block text-xs text-slate-500">Score over this goes to the Auto-selected column. Default {defaults.autoInviteAbove}.</span>
         </label>
       </div>
 
@@ -66,11 +60,9 @@ export function SettingsForm({ initial, defaults }: { initial: Settings; default
           <div className="bg-amber-300" style={{ width: `${Math.max(0, Math.min(100, hi) - Math.max(0, lo))}%` }} />
           <div className="flex-1 bg-emerald-400" />
         </div>
-        0–{lo - 1}: <b>auto-reject</b> · {lo}–{hi}: <b>your review</b> · {hi + 1}–100: <b>auto-invite</b>
-        {" · "}
-        {hold > 0 ? `automatic emails wait ${hold}h (Undo available)` : "automatic emails go out immediately"}
+        0–{lo - 1}: <b>Auto-rejected</b> · {lo}–{hi}: <b>Review</b> · {hi + 1}–100: <b>Auto-selected</b>. Nothing is emailed until you click Send.
         <div className="mt-1 text-xs text-slate-500">
-          Safety checks still send a candidate to review instead: no email address, unreadable CV, a strong Kargo pattern on an auto-reject (the rubric&apos;s rescue rule), or no calendar link for invites when test mode is off.
+          Safety checks put a candidate in Review instead: no email address, unreadable CV, a strong Kargo pattern on an auto-reject (the rubric&apos;s rescue rule), or no calendar link for invites when test mode is off. Saving re-sorts everyone not yet emailed.
         </div>
       </div>
 

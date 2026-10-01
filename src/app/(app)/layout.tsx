@@ -3,13 +3,18 @@ import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { isDemoMode } from "@/lib/demo/mode";
 import { env } from "@/lib/env";
-import { finalizeDue } from "@/lib/pipeline";
 import { loginRequired } from "@/lib/session";
 
 export default async function AppLayout({ children }: LayoutProps<"/">) {
   const email = await requireAdmin();
-  await finalizeDue();
-  const { count } = await db().from("candidates").select("id", { count: "exact", head: true }).eq("stage", "review");
+  const counts = Object.fromEntries(
+    await Promise.all(
+      (["auto_selected", "review", "auto_rejected"] as const).map(async (stage) => {
+        const { count } = await db().from("candidates").select("id", { count: "exact", head: true }).eq("stage", stage);
+        return [stage, count ?? 0] as const;
+      }),
+    ),
+  ) as Record<"auto_selected" | "review" | "auto_rejected", number>;
   const demo = isDemoMode();
 
   return (
@@ -41,7 +46,7 @@ export default async function AppLayout({ children }: LayoutProps<"/">) {
               </form>
             )}
           </div>
-          <Nav reviewCount={count ?? 0} />
+          <Nav counts={counts} />
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>

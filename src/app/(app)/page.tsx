@@ -14,9 +14,9 @@ export const metadata = { title: "Dashboard · Kargo Hiring" };
 
 const FILTERS: { value: string; label: string; match: (c: Candidate) => boolean }[] = [
   { value: "all", label: "All", match: () => true },
+  { value: "selected", label: "Auto-selected", match: (c) => c.stage === "auto_selected" },
   { value: "review", label: "Review", match: (c) => c.stage === "review" || c.stage === "drafting" },
-  { value: "invite", label: "Auto-invite", match: (c) => c.band === "auto_invite" || c.stage === "invite_pending" },
-  { value: "reject", label: "Auto-reject", match: (c) => c.band === "auto_reject" || c.stage === "reject_pending" },
+  { value: "rejected", label: "Auto-rejected", match: (c) => c.stage === "auto_rejected" },
   { value: "sent", label: "Sent", match: (c) => c.stage === "sent" },
 ];
 
@@ -41,14 +41,14 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     warnings.push(
       env.testMode()
         ? "The interview calendar link is still the {calendar_link} placeholder. Set it in Settings before going live."
-        : "Set the interview calendar link in Settings. Until you do, high scorers go to review instead of getting an automatic invite.",
+        : "Set the interview calendar link in Settings. Until you do, high scorers go to Review instead of Auto-selected.",
     );
 
   const stats = [
-    { label: "CVs uploaded", value: candidates.length, href: "/" },
+    { label: "Auto-selected", value: scored.filter((c) => c.stage === "auto_selected").length, href: "/selected" },
     { label: "Waiting for your review", value: scored.filter((c) => c.stage === "review").length, href: "/review" },
-    { label: "Auto emails on hold", value: scored.filter((c) => c.stage === "invite_pending" || c.stage === "reject_pending").length, href: `/?role=${role}&show=all` },
-    { label: "Sent", value: scored.filter((c) => c.stage === "sent").length, href: `/?role=${role}&show=sent` },
+    { label: "Auto-rejected", value: scored.filter((c) => c.stage === "auto_rejected").length, href: "/rejected" },
+    { label: "Emails sent", value: scored.filter((c) => c.stage === "sent").length, href: `/?role=${role}&show=sent` },
   ];
 
   const href = (r: Role, show: string) => `/?role=${r}${show === "all" ? "" : `&show=${show}`}`;
@@ -59,9 +59,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         title="Candidates"
         subtitle={
           <>
-            Ranked by score within each role. Below <b>{settings.autoRejectBelow}</b>: rejection sent automatically. Above{" "}
-            <b>{settings.autoInviteAbove}</b>: invite sent automatically. In between: your review.
-            {settings.holdHours > 0 ? ` Automatic emails wait ${settings.holdHours}h so you can Undo.` : " Automatic emails go out immediately."}
+            Ranked by score within each role. Above <b>{settings.autoInviteAbove}</b>: Auto-selected. Below <b>{settings.autoRejectBelow}</b>:
+            Auto-rejected. In between: your Review. Nothing is emailed until you click Send (one at a time, or a whole column at once).
           </>
         }
         actions={
@@ -91,7 +90,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       {missing > 0 && (
         <Card className="flex flex-wrap items-center justify-between gap-3 border-teal-200 bg-teal-50/50">
           <p className="text-sm text-slate-800">
-            {missing} email draft{missing === 1 ? "" : "s"} still to write. Candidates move to review or get their automatic email once their drafts are ready.
+            {missing} email draft{missing === 1 ? "" : "s"} still to write. Candidates move into Auto-selected, Review or Auto-rejected once their drafts are ready.
           </p>
           <DraftRefresher stale={missing} />
         </Card>
